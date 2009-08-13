@@ -424,6 +424,7 @@ static ngx_keyval_t  ngx_http_proxy_headers[] = {
     { ngx_string("Host"), ngx_string("$proxy_host") },
     { ngx_string("Connection"), ngx_string("close") },
     { ngx_string("Keep-Alive"), ngx_string("") },
+    { ngx_string("Expect"), ngx_string("") },
     { ngx_null_string, ngx_null_string }
 };
 
@@ -1897,6 +1898,12 @@ ngx_http_proxy_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
         conf->proxy_lengths = prev->proxy_lengths;
         conf->proxy_values = prev->proxy_values;
     }
+
+#if (NGX_HTTP_SSL)
+    if (conf->upstream.ssl == NULL) {
+        conf->upstream.ssl = prev->upstream.ssl;
+    }
+#endif
 
     ngx_conf_merge_uint_value(conf->headers_hash_max_size,
                               prev->headers_hash_max_size, 512);

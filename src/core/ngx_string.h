@@ -52,8 +52,24 @@ typedef struct {
 
 
 #define ngx_strstr(s1, s2)  strstr((const char *) s1, (const char *) s2)
-#define ngx_strchr(s1, c)   strchr((const char *) s1, (int) c)
 #define ngx_strlen(s)       strlen((const char *) s)
+
+#define ngx_strchr(s1, c)   strchr((const char *) s1, (int) c)
+
+static ngx_inline u_char *
+ngx_strlchr(u_char *p, u_char *last, u_char c)
+{
+    while (p < last) {
+
+        if (*p == c) {
+            return p;
+        }
+
+        p++;
+    }
+
+    return NULL;
+}
 
 
 /*
@@ -151,9 +167,9 @@ u_char *ngx_hex_dump(u_char *dst, u_char *src, size_t len);
 void ngx_encode_base64(ngx_str_t *dst, ngx_str_t *src);
 ngx_int_t ngx_decode_base64(ngx_str_t *dst, ngx_str_t *src);
 
-uint32_t ngx_utf_decode(u_char **p, size_t n);
-size_t ngx_utf_length(u_char *p, size_t n);
-u_char *ngx_utf_cpystrn(u_char *dst, u_char *src, size_t n);
+uint32_t ngx_utf8_decode(u_char **p, size_t n);
+size_t ngx_utf8_length(u_char *p, size_t n);
+u_char *ngx_utf8_cpystrn(u_char *dst, u_char *src, size_t n, size_t len);
 
 
 #define NGX_ESCAPE_URI         0

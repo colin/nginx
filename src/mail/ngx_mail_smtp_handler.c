@@ -12,6 +12,7 @@
 
 
 static void ngx_mail_smtp_resolve_addr_handler(ngx_resolver_ctx_t *ctx);
+static void ngx_mail_smtp_resolve_name(ngx_event_t *rev);
 static void ngx_mail_smtp_resolve_name_handler(ngx_resolver_ctx_t *ctx);
 static void ngx_mail_smtp_greeting(ngx_mail_session_t *s, ngx_connection_t *c);
 static void ngx_mail_smtp_invalid_pipelining(ngx_event_t *rev);
@@ -88,9 +89,8 @@ ngx_mail_smtp_init_session(ngx_mail_session_t *s, ngx_connection_t *c)
 static void
 ngx_mail_smtp_resolve_addr_handler(ngx_resolver_ctx_t *ctx)
 {
-    ngx_connection_t          *c;
-    ngx_mail_session_t        *s;
-    ngx_mail_core_srv_conf_t  *cscf;
+    ngx_connection_t    *c;
+    ngx_mail_session_t  *s;
 
     s = ctx->data;
     c = s->connection;
@@ -130,6 +130,23 @@ ngx_mail_smtp_resolve_addr_handler(ngx_resolver_ctx_t *ctx)
 
     ngx_log_debug1(NGX_LOG_DEBUG_MAIL, c->log, 0,
                    "address resolved: %V", &s->host);
+
+    c->read->handler = ngx_mail_smtp_resolve_name;
+
+    ngx_post_event(c->read, &ngx_posted_events);
+}
+
+
+static void
+ngx_mail_smtp_resolve_name(ngx_event_t *rev)
+{
+    ngx_connection_t          *c;
+    ngx_mail_session_t        *s;
+    ngx_resolver_ctx_t        *ctx;
+    ngx_mail_core_srv_conf_t  *cscf;
+
+    c = rev->data;
+    s = c->data;
 
     cscf = ngx_mail_get_module_srv_conf(s, ngx_mail_core_module);
 
@@ -435,7 +452,7 @@ ngx_mail_smtp_auth_state(ngx_event_t *rev)
             break;
 
         case ngx_smtp_auth_login_username:
-            rc = ngx_mail_auth_login_username(s, c);
+            rc = ngx_mail_auth_login_username(s, c, 0);
 
             s->out.len = sizeof(smtp_password) - 1;
             s->out.data = smtp_password;
@@ -578,6 +595,14 @@ ngx_mail_smtp_auth(ngx_mail_session_t *s, ngx_connection_t *c)
         s->mail_state = ngx_smtp_auth_login_username;
 
         return NGX_OK;
+
+    case NGX_MAIL_AUTH_LOGIN_USERNAME:
+
+        s->out.len = sizeof(smtp_password) - 1;
+        s->out.data = smtp_password;
+        s->mail_state = ngx_smtp_auth_login_password;
+
+        return ngx_mail_auth_login_username(s, c, 1);
 
     case NGX_MAIL_AUTH_PLAIN:
 
