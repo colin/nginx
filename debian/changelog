@@ -1,3 +1,9 @@
+nginx (0.6.32-3sofa) unstable; urgency=low
+
+  * Added passenger module
+
+ -- Colin Schlueter <mail@colinschlueter.com>  Thu, Aug 13 2009 15:58:14 +0200
+
 nginx (0.6.32-3) unstable; urgency=low
 
   * debian/control: build again on all the architectures, but use the switch
