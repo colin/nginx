@@ -127,18 +127,10 @@ ngx_log_error_core(ngx_uint_t level, ngx_log_t *log, ngx_err_t err,
         }
 
 #if (NGX_WIN32)
-
-        if ((unsigned) err >= 0x80000000) {
-            p = ngx_snprintf(p, last - p, " (%Xd: ", err);
-
-        } else {
-            p = ngx_snprintf(p, last - p, " (%d: ", err);
-        }
-
+        p = ngx_snprintf(p, last - p, ((unsigned) err < 0x80000000)
+                                           ? " (%d: " : " (%Xd: ", err);
 #else
-
         p = ngx_snprintf(p, last - p, " (%d: ", err);
-
 #endif
 
         p = ngx_strerror_r(err, p, last - p);
@@ -158,7 +150,7 @@ ngx_log_error_core(ngx_uint_t level, ngx_log_t *log, ngx_err_t err,
 
     ngx_linefeed(p);
 
-    ngx_write_fd(log->file->fd, errstr, p - errstr);
+    (void) ngx_write_fd(log->file->fd, errstr, p - errstr);
 }
 
 
@@ -192,9 +184,9 @@ ngx_log_debug_core(ngx_log_t *log, ngx_err_t err, const char *fmt, ...)
 
 
 void
-ngx_log_abort(ngx_err_t err, const char *text)
+ngx_log_abort(ngx_err_t err, const char *text, void *param)
 {
-    ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, err, text);
+    ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, err, text, param);
 }
 
 
@@ -310,7 +302,10 @@ ngx_set_error_log_levels(ngx_conf_t *cf, ngx_log_t *log)
         }
     }
 
-    if (log->log_level == NGX_LOG_DEBUG) {
+    if (log->log_level == 0) {
+        log->log_level = NGX_LOG_ERR;
+
+    } else if (log->log_level == NGX_LOG_DEBUG) {
         log->log_level = NGX_LOG_DEBUG_ALL;
     }
 
