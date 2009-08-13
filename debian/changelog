@@ -1,3 +1,9 @@
+nginx (0.6.38-0sofa) unstable; urgency=low
+
+  * Imported upstream version 0.6.38
+
+ -- Colin Schlueter <mail@colinschlueter.com>  Thu, 13 Aug 2009 17:22:24 +0200
+
 nginx (0.6.32-3sofa) unstable; urgency=low
 
   * Added passenger module
