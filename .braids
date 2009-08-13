@@ -1,0 +1,8 @@
+--- 
+debian/passenger: 
+  squashed: true
+  url: git://github.com/FooBarWidget/passenger.git
+  type: git
+  revision: 423a88a1c5180f0209e91f14c05e7bde82818928
+  branch: master
+  remote: braid/debian/passenger
