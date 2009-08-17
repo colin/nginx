@@ -61,7 +61,8 @@ static ngx_str_t ngx_http_status_lines[] = {
 
     /* ngx_null_string, */  /* "207 Multi-Status" */
 
-#define NGX_HTTP_LEVEL_200  7
+#define NGX_HTTP_LAST_LEVEL_200  207
+#define NGX_HTTP_LEVEL_200       (NGX_HTTP_LAST_LEVEL_200 - 200)
 
     /* ngx_null_string, */  /* "300 Multiple Choices" */
 
@@ -74,7 +75,8 @@ static ngx_str_t ngx_http_status_lines[] = {
     /* ngx_null_string, */  /* "306 unused" */
     /* ngx_null_string, */  /* "307 Temporary Redirect" */
 
-#define NGX_HTTP_LEVEL_300  4
+#define NGX_HTTP_LAST_LEVEL_300  305
+#define NGX_HTTP_LEVEL_300       (NGX_HTTP_LAST_LEVEL_300 - 301)
 
     ngx_string("400 Bad Request"),
     ngx_string("401 Unauthorized"),
@@ -106,7 +108,8 @@ static ngx_str_t ngx_http_status_lines[] = {
     /* ngx_null_string, */  /* "423 Locked" */
     /* ngx_null_string, */  /* "424 Failed Dependency" */
 
-#define NGX_HTTP_LEVEL_400  17
+#define NGX_HTTP_LAST_LEVEL_400  417
+#define NGX_HTTP_LEVEL_400       (NGX_HTTP_LAST_LEVEL_400 - 400)
 
     ngx_string("500 Internal Server Error"),
     ngx_string("501 Method Not Implemented"),
@@ -120,6 +123,9 @@ static ngx_str_t ngx_http_status_lines[] = {
     /* ngx_null_string, */  /* "508 unused" */
     /* ngx_null_string, */  /* "509 unused" */
     /* ngx_null_string, */  /* "510 Not Extended" */
+
+#define NGX_HTTP_LAST_LEVEL_500  508
+
 };
 
 
@@ -153,16 +159,20 @@ ngx_http_header_filter(ngx_http_request_t *r)
 {
     u_char                    *p;
     size_t                     len;
-    ngx_str_t                  host;
+    ngx_str_t                  host, *status_line;
     ngx_buf_t                 *b;
-    ngx_uint_t                 status, i;
+    ngx_uint_t                 status, i, port;
     ngx_chain_t                out;
     ngx_list_part_t           *part;
     ngx_table_elt_t           *header;
+    ngx_connection_t          *c;
     ngx_http_core_loc_conf_t  *clcf;
     ngx_http_core_srv_conf_t  *cscf;
-    /* AF_INET only */
-    u_char                     addr[INET_ADDRSTRLEN];
+    struct sockaddr_in        *sin;
+#if (NGX_HAVE_INET6)
+    struct sockaddr_in6       *sin6;
+#endif
+    u_char                     addr[NGX_SOCKADDR_STRLEN];
 
     r->header_sent = 1;
 
@@ -196,17 +206,21 @@ ngx_http_header_filter(ngx_http_request_t *r)
 
     if (r->headers_out.status_line.len) {
         len += r->headers_out.status_line.len;
+        status_line = &r->headers_out.status_line;
 #if (NGX_SUPPRESS_WARN)
-        status = NGX_INVALID_ARRAY_INDEX;
+        status = 0;
 #endif
 
     } else {
 
-        if (r->headers_out.status < NGX_HTTP_MOVED_PERMANENTLY) {
-            /* 2XX */
-            status = r->headers_out.status - NGX_HTTP_OK;
+        status = r->headers_out.status;
 
-            if (r->headers_out.status == NGX_HTTP_NO_CONTENT) {
+        if (status >= NGX_HTTP_OK
+            && status < NGX_HTTP_LAST_LEVEL_200)
+        {
+            /* 2XX */
+
+            if (status == NGX_HTTP_NO_CONTENT) {
                 r->header_only = 1;
                 r->headers_out.content_type.len = 0;
                 r->headers_out.content_type.data = NULL;
@@ -216,30 +230,50 @@ ngx_http_header_filter(ngx_http_request_t *r)
                 r->headers_out.content_length_n = -1;
             }
 
-        } else if (r->headers_out.status < NGX_HTTP_BAD_REQUEST) {
-            /* 3XX */
-            status = r->headers_out.status - NGX_HTTP_MOVED_PERMANENTLY
-                                           + NGX_HTTP_LEVEL_200;
+            status -= NGX_HTTP_OK;
+            status_line = &ngx_http_status_lines[status];
+            len += ngx_http_status_lines[status].len;
 
-            if (r->headers_out.status == NGX_HTTP_NOT_MODIFIED) {
+        } else if (status >= NGX_HTTP_MOVED_PERMANENTLY
+                   && status < NGX_HTTP_LAST_LEVEL_300)
+        {
+            /* 3XX */
+
+            if (status == NGX_HTTP_NOT_MODIFIED) {
                 r->header_only = 1;
             }
 
-        } else if (r->headers_out.status < NGX_HTTP_INTERNAL_SERVER_ERROR) {
+            status = status - NGX_HTTP_MOVED_PERMANENTLY + NGX_HTTP_LEVEL_200;
+            status_line = &ngx_http_status_lines[status];
+            len += ngx_http_status_lines[status].len;
+
+        } else if (status >= NGX_HTTP_BAD_REQUEST
+                   && status < NGX_HTTP_LAST_LEVEL_400)
+        {
             /* 4XX */
-            status = r->headers_out.status - NGX_HTTP_BAD_REQUEST
-                                           + NGX_HTTP_LEVEL_200
-                                           + NGX_HTTP_LEVEL_300;
+            status = status - NGX_HTTP_BAD_REQUEST
+                            + NGX_HTTP_LEVEL_200
+                            + NGX_HTTP_LEVEL_300;
+
+            status_line = &ngx_http_status_lines[status];
+            len += ngx_http_status_lines[status].len;
+
+        } else if (status >= NGX_HTTP_INTERNAL_SERVER_ERROR
+                   && status < NGX_HTTP_LAST_LEVEL_500)
+        {
+            /* 5XX */
+            status = status - NGX_HTTP_INTERNAL_SERVER_ERROR
+                            + NGX_HTTP_LEVEL_200
+                            + NGX_HTTP_LEVEL_300
+                            + NGX_HTTP_LEVEL_400;
+
+            status_line = &ngx_http_status_lines[status];
+            len += ngx_http_status_lines[status].len;
 
         } else {
-            /* 5XX */
-            status = r->headers_out.status - NGX_HTTP_INTERNAL_SERVER_ERROR
-                                           + NGX_HTTP_LEVEL_200
-                                           + NGX_HTTP_LEVEL_300
-                                           + NGX_HTTP_LEVEL_400;
+            len += NGX_INT_T_LEN;
+            status_line = NULL;
         }
-
-        len += ngx_http_status_lines[status].len;
     }
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
@@ -276,6 +310,8 @@ ngx_http_header_filter(ngx_http_request_t *r)
         len += sizeof("Last-Modified: Mon, 28 Sep 1970 06:00:00 GMT" CRLF) - 1;
     }
 
+    c = r->connection;
+
     if (r->headers_out.location
         && r->headers_out.location->value.len
         && r->headers_out.location->value.data[0] == '/')
@@ -290,38 +326,53 @@ ngx_http_header_filter(ngx_http_request_t *r)
             host = r->headers_in.server;
 
         } else {
+            host.len = NGX_SOCKADDR_STRLEN;
             host.data = addr;
 
-            if (ngx_http_server_addr(r, &host) != NGX_OK) {
+            if (ngx_connection_local_sockaddr(c, &host, 0) != NGX_OK) {
                 return NGX_ERROR;
             }
         }
 
-#if (NGX_HTTP_SSL)
-        if (r->connection->ssl) {
-            len += sizeof("Location: https://") - 1
-                   + host.len
-                   + r->headers_out.location->value.len + 2;
+        switch (c->local_sockaddr->sa_family) {
 
-            if (clcf->port_in_redirect && r->port != 443) {
-                len += r->port_text->len;
-            }
-
-        } else
+#if (NGX_HAVE_INET6)
+        case AF_INET6:
+            sin6 = (struct sockaddr_in6 *) c->local_sockaddr;
+            port = ntohs(sin6->sin6_port);
+            break;
 #endif
-        {
-            len += sizeof("Location: http://") - 1
-                   + host.len
-                   + r->headers_out.location->value.len + 2;
+        default: /* AF_INET */
+            sin = (struct sockaddr_in *) c->local_sockaddr;
+            port = ntohs(sin->sin_port);
+            break;
+        }
 
-            if (clcf->port_in_redirect && r->port != 80) {
-                len += r->port_text->len;
-            }
+        len += sizeof("Location: https://") - 1
+               + host.len
+               + r->headers_out.location->value.len + 2;
+
+        if (clcf->port_in_redirect) {
+
+#if (NGX_HTTP_SSL)
+            if (c->ssl)
+                port = (port == 443) ? 0 : port;
+            else
+#endif
+                port = (port == 80) ? 0 : port;
+
+        } else {
+            port = 0;
+        }
+
+        if (port) {
+            len += sizeof(":65535") - 1;
         }
 
     } else {
         host.len = 0;
         host.data = NULL;
+        port = 0;
     }
 
     if (r->chunked) {
@@ -385,13 +436,11 @@ ngx_http_header_filter(ngx_http_request_t *r)
     b->last = ngx_cpymem(b->last, "HTTP/1.1 ", sizeof("HTTP/1.x ") - 1);
 
     /* status line */
-    if (r->headers_out.status_line.len) {
-        b->last = ngx_copy(b->last, r->headers_out.status_line.data,
-                           r->headers_out.status_line.len);
+    if (status_line) {
+        b->last = ngx_copy(b->last, status_line->data, status_line->len);
 
     } else {
-        b->last = ngx_copy(b->last, ngx_http_status_lines[status].data,
-                           ngx_http_status_lines[status].len);
+        b->last = ngx_sprintf(b->last, "%ui", status);
     }
     *b->last++ = CR; *b->last++ = LF;
 
@@ -465,7 +514,7 @@ ngx_http_header_filter(ngx_http_request_t *r)
                              sizeof("Location: http") - 1);
 
 #if (NGX_HTTP_SSL)
-        if (r->connection->ssl) {
+        if (c->ssl) {
             *b->last++ ='s';
         }
 #endif
@@ -473,21 +522,8 @@ ngx_http_header_filter(ngx_http_request_t *r)
         *b->last++ = ':'; *b->last++ = '/'; *b->last++ = '/';
         b->last = ngx_copy(b->last, host.data, host.len);
 
-        if (clcf->port_in_redirect) {
-#if (NGX_HTTP_SSL)
-            if (r->connection->ssl) {
-                if (r->port != 443) {
-                    b->last = ngx_copy(b->last, r->port_text->data,
-                                       r->port_text->len);
-                }
-            } else
-#endif
-            {
-                if (r->port != 80) {
-                    b->last = ngx_copy(b->last, r->port_text->data,
-                                       r->port_text->len);
-                }
-            }
+        if (port) {
+            b->last = ngx_sprintf(b->last, ":%ui", port);
         }
 
         b->last = ngx_copy(b->last, r->headers_out.location->value.data,
@@ -555,8 +591,8 @@ ngx_http_header_filter(ngx_http_request_t *r)
         *b->last++ = CR; *b->last++ = LF;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "%*s\n", (size_t) (b->last - b->pos), b->pos);
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "%*s", (size_t) (b->last - b->pos), b->pos);
 
     /* the end of HTTP header */
     *b->last++ = CR; *b->last++ = LF;

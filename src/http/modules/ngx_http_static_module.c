@@ -66,7 +66,6 @@ ngx_http_static_handler(ngx_http_request_t *r)
         return NGX_DECLINED;
     }
 
-    /* TODO: Win32 */
     if (r->zero_in_uri) {
         return NGX_DECLINED;
     }
@@ -90,7 +89,9 @@ ngx_http_static_handler(ngx_http_request_t *r)
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
-    of.test_dir = 0;
+    ngx_memzero(&of, sizeof(ngx_open_file_info_t));
+
+    of.directio = clcf->directio;
     of.valid = clcf->open_file_cache_valid;
     of.min_uses = clcf->open_file_cache_min_uses;
     of.errors = clcf->open_file_cache_errors;
@@ -127,11 +128,13 @@ ngx_http_static_handler(ngx_http_request_t *r)
 
         if (rc != NGX_HTTP_NOT_FOUND || clcf->log_not_found) {
             ngx_log_error(level, log, of.err,
-                          ngx_open_file_n " \"%s\" failed", path.data);
+                          "%s \"%s\" failed", of.failed, path.data);
         }
 
         return rc;
     }
+
+    r->root_tested = !r->error_page;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, log, 0, "http static fd: %d", of.fd);
 
@@ -156,7 +159,7 @@ ngx_http_static_handler(ngx_http_request_t *r)
                 len += r->args.len + 1;
             }
 
-            location = ngx_palloc(r->pool, len);
+            location = ngx_pnalloc(r->pool, len);
             if (location == NULL) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
@@ -247,6 +250,7 @@ ngx_http_static_handler(ngx_http_request_t *r)
     b->file->fd = of.fd;
     b->file->name = path;
     b->file->log = log;
+    b->file->directio = of.is_directio;
 
     out.buf = b;
     out.next = NULL;

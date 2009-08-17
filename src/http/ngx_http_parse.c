@@ -700,7 +700,8 @@ done:
 
 
 ngx_int_t
-ngx_http_parse_header_line(ngx_http_request_t *r, ngx_buf_t *b)
+ngx_http_parse_header_line(ngx_http_request_t *r, ngx_buf_t *b,
+    ngx_uint_t allow_underscores)
 {
     u_char      c, ch, *p;
     ngx_uint_t  hash, i;
@@ -776,6 +777,19 @@ ngx_http_parse_header_line(ngx_http_request_t *r, ngx_buf_t *b)
                 hash = ngx_hash(hash, c);
                 r->lowcase_header[i++] = c;
                 i &= (NGX_HTTP_LC_HEADER_LEN - 1);
+                break;
+            }
+
+            if (ch == '_') {
+                if (allow_underscores) {
+                    hash = ngx_hash(hash, ch);
+                    r->lowcase_header[i++] = ch;
+                    i &= (NGX_HTTP_LC_HEADER_LEN - 1);
+
+                } else {
+                    r->invalid_header = 1;
+                }
+
                 break;
             }
 
@@ -1323,12 +1337,7 @@ ngx_http_parse_unsafe_uri(ngx_http_request_t *r, ngx_str_t *uri,
         goto unsafe;
     }
 
-    if (p[0] == '.' && len == 3 && p[1] == '.' && (p[2] == '/'
-#if (NGX_WIN32)
-                                                   || p[2] == '\\'
-#endif
-        ))
-    {
+    if (p[0] == '.' && len == 3 && p[1] == '.' && (ngx_path_separator(p[2]))) {
         goto unsafe;
     }
 
@@ -1353,30 +1362,22 @@ ngx_http_parse_unsafe_uri(ngx_http_request_t *r, ngx_str_t *uri,
             continue;
         }
 
-        if ((ch == '/'
-#if (NGX_WIN32)
-             || ch == '\\'
-#endif
-            ) && len > 2)
-        {
+        if (ngx_path_separator(ch) && len > 2) {
+
             /* detect "/../" */
 
-            if (p[0] == '.' && p[1] == '.' && p[2] == '/') {
+            if (p[0] == '.' && p[1] == '.' && ngx_path_separator(p[2])) {
                 goto unsafe;
             }
 
 #if (NGX_WIN32)
-
-            if (p[2] == '\\') {
-                goto unsafe;
-            }
 
             if (len > 3) {
 
                 /* detect "/.../" */
 
                 if (p[0] == '.' && p[1] == '.' && p[2] == '.'
-                    && (p[3] == '/' || p[3] == '\\'))
+                    && ngx_path_separator(p[3]))
                 {
                     goto unsafe;
                 }
@@ -1462,6 +1463,48 @@ ngx_http_parse_multi_header_lines(ngx_array_t *headers, ngx_str_t *name,
             }
 
             while (start < end && *start == ' ') { start++; }
+        }
+    }
+
+    return NGX_DECLINED;
+}
+
+
+ngx_int_t
+ngx_http_arg(ngx_http_request_t *r, u_char *name, size_t len, ngx_str_t *value)
+{
+    u_char  *p, *last;
+
+    if (r->args.len == 0) {
+        return NGX_DECLINED;
+    }
+
+    p = r->args.data;
+    last = p + r->args.len;
+
+    for ( /* void */ ; p < last; p++) {
+
+        /* we need '=' after name, so drop one char from last */
+
+        p = ngx_strlcasestrn(p, last - 1, name, len - 1);
+
+        if (p == NULL) {
+            return NGX_DECLINED;
+        }
+
+        if ((p == r->args.data || *(p - 1) == '&') && *(p + len) == '=') {
+
+            value->data = p + len + 1;
+
+            p = ngx_strlchr(p, last, '&');
+
+            if (p == NULL) {
+                p = r->args.data + r->args.len;
+            }
+
+            value->len = p - value->data;
+
+            return NGX_OK;
         }
     }
 

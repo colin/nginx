@@ -15,6 +15,63 @@ END
 fi
 
 
+case ".$NGX_SBIN_PATH" in
+    ./*)
+    ;;
+
+    .)
+        NGX_SBIN_PATH=$NGX_PREFIX/sbin/nginx
+    ;;
+
+    *)
+        NGX_SBIN_PATH=$NGX_PREFIX/$NGX_SBIN_PATH
+    ;;
+esac
+
+
+case ".$NGX_CONF_PATH" in
+    ./*)
+    ;;
+
+    *)
+        NGX_CONF_PATH=$NGX_PREFIX/$NGX_CONF_PATH
+    ;;
+esac
+
+
+NGX_CONF_PREFIX=`dirname $NGX_CONF_PATH`
+
+
+case ".$NGX_PID_PATH" in
+    ./*)
+    ;;
+
+    *)
+        NGX_PID_PATH=$NGX_PREFIX/$NGX_PID_PATH
+    ;;
+esac
+
+
+case ".$NGX_ERROR_LOG_PATH" in
+    ./*)
+    ;;
+
+    *)
+        NGX_ERROR_LOG_PATH=$NGX_PREFIX/$NGX_ERROR_LOG_PATH
+    ;;
+esac
+
+
+case ".$NGX_HTTP_LOG_PATH" in
+    ./*)
+    ;;
+
+    *)
+        NGX_HTTP_LOG_PATH=$NGX_PREFIX/$NGX_HTTP_LOG_PATH
+    ;;
+esac
+
+
 cat << END                                                    >> $NGX_MAKEFILE
 
 install:	$NGX_OBJS${ngx_dirsep}nginx${ngx_binext} \
@@ -67,3 +124,39 @@ if test -n "\$(DESTDIR)$NGX_ERROR_LOG_PATH"; then
 END
 
 fi
+
+
+# create Makefile
+
+cat << END >> Makefile
+
+build:
+	\$(MAKE) -f $NGX_MAKEFILE
+
+install:
+	\$(MAKE) -f $NGX_MAKEFILE install
+
+upgrade:
+	$NGX_SBIN_PATH -t
+
+	kill -USR2 \`cat $NGX_PID_PATH\`
+	sleep 1
+	test -f $NGX_PID_PATH.oldbin
+
+	kill -QUIT \`cat $NGX_PID_PATH.oldbin\`
+
+upgrade1:
+	# upgrade 0.1.x to 0.2+
+
+	$NGX_SBIN_PATH -t
+
+	cp $NGX_PID_PATH $NGX_PID_PATH.oldbin
+
+	kill -USR2 \`cat $NGX_PID_PATH\`
+	sleep 1
+	test -f $NGX_PID_PATH.oldbin
+
+	cp $NGX_PID_PATH $NGX_PID_PATH.newbin
+
+	kill -QUIT \`cat $NGX_PID_PATH.oldbin\`
+END

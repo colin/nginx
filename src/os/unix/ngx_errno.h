@@ -23,6 +23,7 @@ typedef int               ngx_err_t;
 #define NGX_EACCES        EACCES
 #define NGX_EBUSY         EBUSY
 #define NGX_EEXIST        EEXIST
+#define NGX_EXDEV         EXDEV
 #define NGX_ENOTDIR       ENOTDIR
 #define NGX_EISDIR        EISDIR
 #define NGX_EINVAL        EINVAL
@@ -43,6 +44,7 @@ typedef int               ngx_err_t;
 #define NGX_EHOSTUNREACH  EHOSTUNREACH
 #define NGX_ENOSYS        ENOSYS
 #define NGX_ECANCELED     ECANCELED
+#define NGX_EILSEQ        EILSEQ
 #define NGX_ENOMOREFILES  0
 
 

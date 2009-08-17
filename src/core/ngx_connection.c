@@ -13,11 +13,11 @@ ngx_os_io_t  ngx_io;
 
 
 ngx_listening_t *
-ngx_listening_inet_stream_socket(ngx_conf_t *cf, in_addr_t addr, in_port_t port)
+ngx_create_listening(ngx_conf_t *cf, void *sockaddr, socklen_t socklen)
 {
-    size_t               len;
-    ngx_listening_t     *ls;
-    struct sockaddr_in  *sin;
+    ngx_listening_t  *ls;
+    struct sockaddr  *sa;
+    u_char            text[NGX_SOCKADDR_STRLEN];
 
     ls = ngx_array_push(&cf->cycle->listening);
     if (ls == NULL) {
@@ -26,34 +26,45 @@ ngx_listening_inet_stream_socket(ngx_conf_t *cf, in_addr_t addr, in_port_t port)
 
     ngx_memzero(ls, sizeof(ngx_listening_t));
 
-    sin = ngx_pcalloc(cf->pool, sizeof(struct sockaddr_in));
-    if (sin == NULL) {
+    sa = ngx_palloc(cf->pool, socklen);
+    if (sa == NULL) {
         return NULL;
     }
 
-    sin->sin_family = AF_INET;
-    sin->sin_addr.s_addr = addr;
-    sin->sin_port = htons(port);
+    ngx_memcpy(sa, sockaddr, socklen);
 
+    ls->sockaddr = sa;
+    ls->socklen = socklen;
 
-    ls->addr_text.data = ngx_palloc(cf->pool,
-                                    INET_ADDRSTRLEN - 1 + sizeof(":65535") - 1);
+    ls->addr_text.len = ngx_sock_ntop(sa, text, NGX_SOCKADDR_STRLEN, 1);
+
+    ls->addr_text.data = ngx_pnalloc(cf->pool, ls->addr_text.len);
     if (ls->addr_text.data == NULL) {
         return NULL;
     }
 
-    len = ngx_inet_ntop(AF_INET, &addr, ls->addr_text.data, INET_ADDRSTRLEN);
-
-    ls->addr_text.len = ngx_sprintf(ls->addr_text.data + len, ":%d", port)
-                        - ls->addr_text.data;
+    ngx_memcpy(ls->addr_text.data, text, ls->addr_text.len);
 
     ls->fd = (ngx_socket_t) -1;
-    ls->family = AF_INET;
     ls->type = SOCK_STREAM;
-    ls->sockaddr = (struct sockaddr *) sin;
-    ls->socklen = sizeof(struct sockaddr_in);
-    ls->addr = offsetof(struct sockaddr_in, sin_addr);
-    ls->addr_text_max_len = INET_ADDRSTRLEN;
+
+    switch (ls->sockaddr->sa_family) {
+#if (NGX_HAVE_INET6)
+    case AF_INET6:
+         ls->addr_text_max_len = NGX_INET6_ADDRSTRLEN;
+         break;
+#endif
+    case AF_INET:
+         ls->addr_text_max_len = NGX_INET_ADDRSTRLEN;
+         break;
+    default:
+         ls->addr_text_max_len = NGX_SOCKADDR_STRLEN;
+         break;
+    }
+
+    ls->backlog = NGX_LISTEN_BACKLOG;
+    ls->rcvbuf = -1;
+    ls->sndbuf = -1;
 
     return ls;
 }
@@ -65,7 +76,6 @@ ngx_set_inherited_sockets(ngx_cycle_t *cycle)
     size_t                     len;
     ngx_uint_t                 i;
     ngx_listening_t           *ls;
-    struct sockaddr_in        *sin;
     socklen_t                  olen;
 #if (NGX_HAVE_DEFERRED_ACCEPT && defined SO_ACCEPTFILTER)
     ngx_err_t                  err;
@@ -94,34 +104,39 @@ ngx_set_inherited_sockets(ngx_cycle_t *cycle)
             continue;
         }
 
-        sin = (struct sockaddr_in *) ls[i].sockaddr;
+        switch (ls[i].sockaddr->sa_family) {
 
-        if (sin->sin_family != AF_INET) {
+#if (NGX_HAVE_INET6)
+        case AF_INET6:
+             ls[i].addr_text_max_len = NGX_INET6_ADDRSTRLEN;
+             break;
+#endif
+
+        case AF_INET:
+             ls[i].addr_text_max_len = NGX_INET_ADDRSTRLEN;
+             break;
+
+        default:
             ngx_log_error(NGX_LOG_CRIT, cycle->log, ngx_socket_errno,
                           "the inherited socket #%d has "
-                          "unsupported family", ls[i].fd);
+                          "an unsupported protocol family", ls[i].fd);
             ls[i].ignore = 1;
             continue;
         }
 
-        ls[i].addr_text_max_len = INET_ADDRSTRLEN;
+        len = ls[i].addr_text_max_len + sizeof(":65535") - 1;
 
-        ls[i].addr_text.data = ngx_palloc(cycle->pool, INET_ADDRSTRLEN - 1
-                                                       + sizeof(":65535") - 1);
+        ls[i].addr_text.data = ngx_pnalloc(cycle->pool, len);
         if (ls[i].addr_text.data == NULL) {
             return NGX_ERROR;
         }
 
-        ls[i].family = sin->sin_family;
-        len = ngx_sock_ntop(ls[i].family, ls[i].sockaddr,
-                            ls[i].addr_text.data, INET_ADDRSTRLEN);
+        len = ngx_sock_ntop(ls[i].sockaddr, ls[i].addr_text.data, len, 1);
         if (len == 0) {
             return NGX_ERROR;
         }
 
-        ls[i].addr_text.len = ngx_sprintf(ls[i].addr_text.data + len, ":%d",
-                                          ntohs(sin->sin_port))
-                              - ls[i].addr_text.data;
+        ls[i].addr_text.len = len;
 
         ls[i].backlog = NGX_LISTEN_BACKLOG;
 
@@ -254,7 +269,7 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
                 continue;
             }
 
-            s = ngx_socket(ls[i].family, ls[i].type, 0);
+            s = ngx_socket(ls[i].sockaddr->sa_family, ls[i].type, 0);
 
             if (s == -1) {
                 ngx_log_error(NGX_LOG_EMERG, log, ngx_socket_errno,
@@ -279,6 +294,23 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
                 return NGX_ERROR;
             }
 
+#if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
+
+            if (ls[i].sockaddr->sa_family == AF_INET6 && ls[i].ipv6only) {
+                int  ipv6only;
+
+                ipv6only = (ls[i].ipv6only == 1);
+
+                if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
+                               (const void *) &ipv6only, sizeof(int))
+                    == -1)
+                {
+                    ngx_log_error(NGX_LOG_EMERG, log, ngx_socket_errno,
+                                  "setsockopt(IPV6_V6ONLY) %V failed, ignored",
+                                  &ls[i].addr_text);
+                }
+            }
+#endif
             /* TODO: close on exit */
 
             if (!(ngx_event_flags & NGX_USE_AIO_EVENT)) {
@@ -297,7 +329,7 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
                 }
             }
 
-            ngx_log_debug2(NGX_LOG_DEBUG_CORE, cycle->log, 0,
+            ngx_log_debug2(NGX_LOG_DEBUG_CORE, log, 0,
                            "bind() %V #%d ", &ls[i].addr_text, s);
 
             if (bind(s, ls[i].sockaddr, ls[i].socklen) == -1) {
@@ -366,7 +398,7 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
 
 
 void
-ngx_configure_listening_socket(ngx_cycle_t *cycle)
+ngx_configure_listening_sockets(ngx_cycle_t *cycle)
 {
     ngx_uint_t                 i;
     ngx_listening_t           *ls;
@@ -380,6 +412,8 @@ ngx_configure_listening_socket(ngx_cycle_t *cycle)
 
     ls = cycle->listening.elts;
     for (i = 0; i < cycle->listening.nelts; i++) {
+
+        ls[i].log = *ls[i].logp;
 
         if (ls[i].rcvbuf != -1) {
             if (setsockopt(ls[i].fd, SOL_SOCKET, SO_RCVBUF,
@@ -537,28 +571,30 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle)
 
         c = ls[i].connection;
 
-        if (c->read->active) {
-            if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
-                ngx_del_conn(c, NGX_CLOSE_EVENT);
+        if (c) {
+            if (c->read->active) {
+                if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
+                    ngx_del_conn(c, NGX_CLOSE_EVENT);
 
-            } else if (ngx_event_flags & NGX_USE_EPOLL_EVENT) {
+                } else if (ngx_event_flags & NGX_USE_EPOLL_EVENT) {
 
-                /*
-                 * it seems that Linux-2.6.x OpenVZ sends events
-                 * for closed shared listening sockets unless
-                 * the events was explicity deleted
-                 */
+                    /*
+                     * it seems that Linux-2.6.x OpenVZ sends events
+                     * for closed shared listening sockets unless
+                     * the events was explicity deleted
+                     */
 
-                ngx_del_event(c->read, NGX_READ_EVENT, 0);
+                    ngx_del_event(c->read, NGX_READ_EVENT, 0);
 
-            } else {
-                ngx_del_event(c->read, NGX_READ_EVENT, NGX_CLOSE_EVENT);
+                } else {
+                    ngx_del_event(c->read, NGX_READ_EVENT, NGX_CLOSE_EVENT);
+                }
             }
+
+            ngx_free_connection(c);
+
+            c->fd = (ngx_socket_t) -1;
         }
-
-        ngx_free_connection(c);
-
-        c->fd = (ngx_socket_t) -1;
 
         ngx_log_debug2(NGX_LOG_DEBUG_CORE, cycle->log, 0,
                        "close listening %V #%d ", &ls[i].addr_text, ls[i].fd);
@@ -567,6 +603,8 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle)
             ngx_log_error(NGX_LOG_EMERG, cycle->log, ngx_socket_errno,
                           ngx_close_socket_n " %V failed", &ls[i].addr_text);
         }
+
+        ls[i].fd = (ngx_socket_t) -1;
     }
 }
 
@@ -594,7 +632,7 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
 
     if (c == NULL) {
         ngx_log_error(NGX_LOG_ALERT, log, 0,
-                      "%ui worker_connections is not enough",
+                      "%ui worker_connections are not enough",
                       ngx_cycle->connection_n);
 
         /* ngx_mutex_unlock */
@@ -775,11 +813,78 @@ ngx_close_connection(ngx_connection_t *c)
 
 
 ngx_int_t
+ngx_connection_local_sockaddr(ngx_connection_t *c, ngx_str_t *s,
+    ngx_uint_t port)
+{
+    socklen_t             len;
+    ngx_uint_t            addr;
+    u_char                sa[NGX_SOCKADDRLEN];
+    struct sockaddr_in   *sin;
+#if (NGX_HAVE_INET6)
+    ngx_uint_t            i;
+    struct sockaddr_in6  *sin6;
+#endif
+
+    switch (c->local_sockaddr->sa_family) {
+
+#if (NGX_HAVE_INET6)
+    case AF_INET6:
+        sin6 = (struct sockaddr_in6 *) c->local_sockaddr;
+
+        for (addr = 0, i = 0; addr == 0 && i < 16; i++) {
+            addr |= sin6->sin6_addr.s6_addr[i];
+        }
+
+        break;
+#endif
+
+    default: /* AF_INET */
+        sin = (struct sockaddr_in *) c->local_sockaddr;
+        addr = sin->sin_addr.s_addr;
+        break;
+    }
+
+    if (addr == 0) {
+
+        len = NGX_SOCKADDRLEN;
+
+        if (getsockname(c->fd, (struct sockaddr *) &sa, &len) == -1) {
+            ngx_connection_error(c, ngx_socket_errno, "getsockname() failed");
+            return NGX_ERROR;
+        }
+
+        c->local_sockaddr = ngx_palloc(c->pool, len);
+        if (c->local_sockaddr == NULL) {
+            return NGX_ERROR;
+        }
+
+        c->local_socklen = len;
+        ngx_memcpy(c->local_sockaddr, &sa, len);
+    }
+
+    if (s == NULL) {
+        return NGX_OK;
+    }
+
+    s->len = ngx_sock_ntop(c->local_sockaddr, s->data, s->len, port);
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
 ngx_connection_error(ngx_connection_t *c, ngx_err_t err, char *text)
 {
     ngx_uint_t  level;
 
-    if (err == NGX_ECONNRESET && c->log_error == NGX_ERROR_IGNORE_ECONNRESET) {
+    /* Winsock may return NGX_ECONNABORTED instead of NGX_ECONNRESET */
+
+    if ((err == NGX_ECONNRESET
+#if (NGX_WIN32)
+         || err == NGX_ECONNABORTED
+#endif
+        ) && c->log_error == NGX_ERROR_IGNORE_ECONNRESET)
+    {
         return 0;
     }
 
@@ -791,7 +896,9 @@ ngx_connection_error(ngx_connection_t *c, ngx_err_t err, char *text)
 
     if (err == 0
         || err == NGX_ECONNRESET
-#if !(NGX_WIN32)
+#if (NGX_WIN32)
+        || err == NGX_ECONNABORTED
+#else
         || err == NGX_EPIPE
 #endif
         || err == NGX_ENOTCONN

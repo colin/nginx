@@ -19,11 +19,9 @@ struct ngx_listening_s {
 
     struct sockaddr    *sockaddr;
     socklen_t           socklen;    /* size of sockaddr */
-    size_t              addr;       /* offset to address in sockaddr */
     size_t              addr_text_max_len;
     ngx_str_t           addr_text;
 
-    int                 family;
     int                 type;
 
     int                 backlog;
@@ -36,6 +34,7 @@ struct ngx_listening_s {
     void               *servers;  /* array of ngx_http_in_addr_t, for example */
 
     ngx_log_t           log;
+    ngx_log_t          *logp;
 
     size_t              pool_size;
     /* should be here because of the AcceptEx() preread */
@@ -57,6 +56,10 @@ struct ngx_listening_s {
     unsigned            nonblocking:1;
     unsigned            shared:1;    /* shared between threads or processes */
     unsigned            addr_ntop:1;
+
+#if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
+    unsigned            ipv6only:2;
+#endif
 
 #if (NGX_HAVE_DEFERRED_ACCEPT)
     unsigned            deferred_accept:1;
@@ -125,10 +128,8 @@ struct ngx_connection_s {
     ngx_ssl_connection_t  *ssl;
 #endif
 
-#if (NGX_HAVE_IOCP)
     struct sockaddr    *local_sockaddr;
     socklen_t           local_socklen;
-#endif
 
     ngx_buf_t          *buffer;
 
@@ -164,18 +165,15 @@ struct ngx_connection_s {
 };
 
 
-#ifndef ngx_ssl_set_nosendshut
-#define ngx_ssl_set_nosendshut(ssl)
-#endif
-
-
-ngx_listening_t *ngx_listening_inet_stream_socket(ngx_conf_t *cf,
-    in_addr_t addr, in_port_t port);
+ngx_listening_t *ngx_create_listening(ngx_conf_t *cf, void *sockaddr,
+    socklen_t socklen);
 ngx_int_t ngx_set_inherited_sockets(ngx_cycle_t *cycle);
 ngx_int_t ngx_open_listening_sockets(ngx_cycle_t *cycle);
-void ngx_configure_listening_socket(ngx_cycle_t *cycle);
+void ngx_configure_listening_sockets(ngx_cycle_t *cycle);
 void ngx_close_listening_sockets(ngx_cycle_t *cycle);
 void ngx_close_connection(ngx_connection_t *c);
+ngx_int_t ngx_connection_local_sockaddr(ngx_connection_t *c, ngx_str_t *s,
+    ngx_uint_t port);
 ngx_int_t ngx_connection_error(ngx_connection_t *c, ngx_err_t err, char *text);
 
 ngx_connection_t *ngx_get_connection(ngx_socket_t s, ngx_log_t *log);

@@ -56,7 +56,7 @@ ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
 
         flags = (rev->eof || rev->error) ? NGX_CLOSE_EVENT : 0;
 
-        if (ngx_handle_read_event(rev, flags) == NGX_ERROR) {
+        if (ngx_handle_read_event(rev, flags) != NGX_OK) {
             return NGX_ABORT;
         }
 
@@ -70,7 +70,7 @@ ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
 
     if (p->downstream->fd != -1 && p->downstream->data == p->output_ctx) {
         wev = p->downstream->write;
-        if (ngx_handle_write_event(wev, p->send_lowat) == NGX_ERROR) {
+        if (ngx_handle_write_event(wev, p->send_lowat) != NGX_OK) {
             return NGX_ABORT;
         }
 
@@ -397,7 +397,7 @@ ngx_event_pipe_read_upstream(ngx_event_pipe_t *p)
 
         p->free_raw_bufs = p->free_raw_bufs->next;
 
-        if (p->free_bufs) {
+        if (p->free_bufs && p->buf_to_file == NULL) {
             for (cl = p->free_raw_bufs; cl; cl = cl->next) {
                 if (cl->buf->shadow == NULL) {
                     ngx_pfree(p->pool, cl->buf->start);
@@ -423,7 +423,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
     size_t             bsize;
     ngx_int_t          rc;
     ngx_uint_t         flush, prev_last_shadow;
-    ngx_chain_t       *out, **ll, *cl;
+    ngx_chain_t       *out, **ll, *cl, file;
     ngx_connection_t  *downstream;
 
     downstream = p->downstream;
@@ -486,6 +486,18 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
                 }
 
                 p->in = NULL;
+            }
+
+            if (p->cacheable && p->buf_to_file) {
+
+                file.buf = p->buf_to_file;
+                file.next = NULL;
+
+                if (ngx_write_chain_to_temp_file(p->temp_file, &file)
+                    == NGX_ERROR)
+                {
+                    return NGX_ABORT;
+                }
             }
 
             ngx_log_debug0(NGX_LOG_DEBUG_EVENT, p->log, 0,

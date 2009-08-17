@@ -12,7 +12,6 @@
 typedef struct {
     ngx_array_t  *codes;        /* uintptr_t */
 
-    ngx_uint_t    captures;
     ngx_uint_t    stack_size;
 
     ngx_flag_t    log;
@@ -155,16 +154,6 @@ ngx_http_rewrite_handler(ngx_http_request_t *r)
                         rlcf->stack_size * sizeof(ngx_http_variable_value_t));
     if (e->sp == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    if (rlcf->captures) {
-        e->captures = ngx_palloc(r->pool, rlcf->captures * sizeof(int));
-        if (e->captures == NULL) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
-        }
-
-    } else {
-        e->captures = NULL;
     }
 
     e->ip = rlcf->codes->elts;
@@ -436,10 +425,6 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     if (regex->ncaptures) {
         regex->ncaptures = (regex->ncaptures + 1) * 3;
-
-        if (lcf->captures < regex->ncaptures) {
-            lcf->captures = regex->ncaptures;
-        }
     }
 
     regex_end = ngx_http_script_add_code(lcf->codes,
@@ -530,7 +515,7 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_conf_t                    save;
     ngx_http_module_t            *module;
     ngx_http_conf_ctx_t          *ctx, *pctx;
-    ngx_http_core_loc_conf_t     *clcf, *pclcf, **clcfp;
+    ngx_http_core_loc_conf_t     *clcf, *pclcf;
     ngx_http_script_if_code_t    *if_code;
     ngx_http_rewrite_loc_conf_t  *nlcf;
 
@@ -573,20 +558,9 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     clcf->name = pclcf->name;
     clcf->noname = 1;
 
-    if (pclcf->locations == NULL) {
-        pclcf->locations = ngx_array_create(cf->pool, 2, sizeof(void *));
-        if (pclcf->locations == NULL) {
-            return NGX_CONF_ERROR;
-        }
-    }
-
-    clcfp = ngx_array_push(pclcf->locations);
-    if (clcfp == NULL) {
+    if (ngx_http_add_location(cf, &pclcf->locations, clcf) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
-
-    *clcfp = clcf;
-
 
     if (ngx_http_rewrite_if_condition(cf, lcf) != NGX_CONF_OK) {
         return NGX_CONF_ERROR;
@@ -626,11 +600,6 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     if (rv != NGX_CONF_OK) {
         return rv;
-    }
-
-
-    if (lcf->captures < nlcf->captures) {
-        lcf->captures = nlcf->captures;
     }
 
 
@@ -788,10 +757,6 @@ ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
 
             if (n) {
                 regex->ncaptures = (n + 1) * 3;
-
-                if (lcf->captures < regex->ncaptures) {
-                    lcf->captures = regex->ncaptures;
-                }
             }
 
             return NGX_CONF_OK;

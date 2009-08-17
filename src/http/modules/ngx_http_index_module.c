@@ -83,23 +83,22 @@ ngx_module_t  ngx_http_index_module = {
 
 
 /*
- * Try to open the first index file before the test of the directory existence
- * because the valid requests should be many more than invalid ones.
- * If open() would fail, then stat() should be more quickly because some data
- * is already cached in the kernel.
- * Besides, Win32 has ERROR_PATH_NOT_FOUND (NGX_ENOTDIR).
- * Unix has ENOTDIR error, although it less helpfull - it points only
- * that path contains the usual file in place of the directory.
+ * Try to open/test the first index file before the test of directory
+ * existence because valid requests should be much more than invalid ones.
+ * If the file open()/stat() would fail, then the directory stat() should
+ * be more quickly because some data is already cached in the kernel.
+ * Besides, Win32 may return ERROR_PATH_NOT_FOUND (NGX_ENOTDIR) at once.
+ * Unix has ENOTDIR error, however, it's less helpful than Win32's one:
+ * it only indicates that path contains an usual file in place of directory.
  */
 
 static ngx_int_t
 ngx_http_index_handler(ngx_http_request_t *r)
 {
     u_char                       *p, *name;
-    size_t                        len, nlen, root, allocated;
+    size_t                        len, root, reserve, allocated;
     ngx_int_t                     rc;
     ngx_str_t                     path, uri;
-    ngx_log_t                    *log;
     ngx_uint_t                    i, dir_tested;
     ngx_http_index_t             *index;
     ngx_open_file_info_t          of;
@@ -117,12 +116,9 @@ ngx_http_index_handler(ngx_http_request_t *r)
         return NGX_DECLINED;
     }
 
-    /* TODO: Win32 */
     if (r->zero_in_uri) {
         return NGX_DECLINED;
     }
-
-    log = r->connection->log;
 
     ilcf = ngx_http_get_module_loc_conf(r, ngx_http_index_module);
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
@@ -131,6 +127,7 @@ ngx_http_index_handler(ngx_http_request_t *r)
     root = 0;
     dir_tested = 0;
     name = NULL;
+    /* suppress MSVC warning */
     path.data = NULL;
 
     index = ilcf->indices->elts;
@@ -142,8 +139,8 @@ ngx_http_index_handler(ngx_http_request_t *r)
                 return ngx_http_internal_redirect(r, &index[i].name, &r->args);
             }
 
-            len = ilcf->max_index_len;
-            nlen = index[i].name.len;
+            reserve = ilcf->max_index_len;
+            len = index[i].name.len;
 
         } else {
             ngx_memzero(&e, sizeof(ngx_http_script_engine_t));
@@ -152,8 +149,7 @@ ngx_http_index_handler(ngx_http_request_t *r)
             e.request = r;
             e.flushed = 1;
 
-            /* 1 byte for terminating '\0' */
-
+            /* 1 is for terminating '\0' as in static names */
             len = 1;
 
             while (*(uintptr_t *) e.ip) {
@@ -161,21 +157,19 @@ ngx_http_index_handler(ngx_http_request_t *r)
                 len += lcode(&e);
             }
 
-            nlen = len;
-
             /* 16 bytes are preallocation */
 
-            len += 16;
+            reserve = len + 16;
         }
 
-        if (len > (size_t) (path.data + allocated - name)) {
+        if (reserve > allocated) {
 
-            name = ngx_http_map_uri_to_path(r, &path, &root, len);
+            name = ngx_http_map_uri_to_path(r, &path, &root, reserve);
             if (name == NULL) {
                 return NGX_ERROR;
             }
 
-            allocated = path.len;
+            allocated = path.data + path.len - name;
         }
 
         if (index[i].values == NULL) {
@@ -196,29 +190,33 @@ ngx_http_index_handler(ngx_http_request_t *r)
             }
 
             if (*name == '/') {
-                uri.len = nlen - 1;
+                uri.len = len - 1;
                 uri.data = name;
                 return ngx_http_internal_redirect(r, &uri, &r->args);
             }
 
             path.len = e.pos - path.data;
 
-            *e.pos++ = '\0';
+            *e.pos = '\0';
         }
 
-        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, log, 0, "open index \"%V\"", &path);
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "open index \"%V\"", &path);
 
-        of.test_dir = 0;
+        ngx_memzero(&of, sizeof(ngx_open_file_info_t));
+
+        of.directio = clcf->directio;
         of.valid = clcf->open_file_cache_valid;
         of.min_uses = clcf->open_file_cache_min_uses;
+        of.test_only = 1;
         of.errors = clcf->open_file_cache_errors;
         of.events = clcf->open_file_cache_events;
 
         if (ngx_open_cached_file(clcf->open_file_cache, &path, &of, r->pool)
             != NGX_OK)
         {
-            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, log, of.err,
-                           ngx_open_file_n " \"%s\" failed", path.data);
+            ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, of.err,
+                           "%s \"%s\" failed", of.failed, path.data);
 
             if (of.err == 0) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -242,25 +240,25 @@ ngx_http_index_handler(ngx_http_request_t *r)
                 continue;
             }
 
-            ngx_log_error(NGX_LOG_ERR, log, of.err,
-                          ngx_open_file_n " \"%s\" failed", path.data);
+            ngx_log_error(NGX_LOG_CRIT, r->connection->log, of.err,
+                          "%s \"%s\" failed", of.failed, path.data);
 
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
-        uri.len = r->uri.len + nlen - 1;
+        uri.len = r->uri.len + len - 1;
 
         if (!clcf->alias) {
             uri.data = path.data + root;
 
         } else {
-            uri.data = ngx_palloc(r->pool, uri.len);
+            uri.data = ngx_pnalloc(r->pool, uri.len);
             if (uri.data == NULL) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
 
             p = ngx_copy(uri.data, r->uri.data, r->uri.len);
-            ngx_memcpy(p, name, nlen - 1);
+            ngx_memcpy(p, name, len - 1);
         }
 
         return ngx_http_internal_redirect(r, &uri, &r->args);
@@ -291,9 +289,11 @@ ngx_http_index_test_dir(ngx_http_request_t *r, ngx_http_core_loc_conf_t *clcf,
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "http index check dir: \"%V\"", &dir);
 
+    ngx_memzero(&of, sizeof(ngx_open_file_info_t));
+
     of.test_dir = 1;
+    of.test_only = 1;
     of.valid = clcf->open_file_cache_valid;
-    of.min_uses = 0;
     of.errors = clcf->open_file_cache_errors;
 
     if (ngx_open_cached_file(clcf->open_file_cache, &dir, &of, r->pool)
@@ -320,7 +320,7 @@ ngx_http_index_test_dir(ngx_http_request_t *r, ngx_http_core_loc_conf_t *clcf,
             }
 
             ngx_log_error(NGX_LOG_CRIT, r->connection->log, of.err,
-                          ngx_open_file_n " \"%s\" failed", dir.data);
+                          "%s \"%s\" failed", of.failed, dir.data);
         }
 
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -490,7 +490,7 @@ ngx_http_index_set_index(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                 continue;
             }
 
-            /* include the terminating '\0' to the length to use ngx_copy() */
+            /* include the terminating '\0' to the length to use ngx_memcpy() */
             index->name.len++;
 
             continue;

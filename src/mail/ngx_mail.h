@@ -26,41 +26,76 @@ typedef struct {
 
 
 typedef struct {
-    in_addr_t               addr;
-    in_port_t               port;
-    int                     family;
+    u_char                  sockaddr[NGX_SOCKADDRLEN];
+    socklen_t               socklen;
 
     /* server ctx */
     ngx_mail_conf_ctx_t    *ctx;
 
     unsigned                bind:1;
+    unsigned                wildcard:1;
+#if (NGX_MAIL_SSL)
+    unsigned                ssl:1;
+#endif
+#if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
+    unsigned                ipv6only:2;
+#endif
 } ngx_mail_listen_t;
 
 
 typedef struct {
-    in_addr_t               addr;
     ngx_mail_conf_ctx_t    *ctx;
     ngx_str_t               addr_text;
+#if (NGX_MAIL_SSL)
+    ngx_uint_t              ssl;    /* unsigned   ssl:1; */
+#endif
+} ngx_mail_addr_conf_t;
+
+typedef struct {
+    in_addr_t               addr;
+    ngx_mail_addr_conf_t    conf;
 } ngx_mail_in_addr_t;
 
 
+#if (NGX_HAVE_INET6)
+
 typedef struct {
-    ngx_mail_in_addr_t     *addrs;       /* array of ngx_mail_in_addr_t */
+    struct in6_addr         addr6;
+    ngx_mail_addr_conf_t    conf;
+} ngx_mail_in6_addr_t;
+
+#endif
+
+
+typedef struct {
+    /* ngx_mail_in_addr_t or ngx_mail_in6_addr_t */
+    void                   *addrs;
     ngx_uint_t              naddrs;
-} ngx_mail_in_port_t;
+} ngx_mail_port_t;
 
 
 typedef struct {
+    int                     family;
     in_port_t               port;
-    ngx_array_t             addrs;       /* array of ngx_mail_conf_in_addr_t */
-} ngx_mail_conf_in_port_t;
+    ngx_array_t             addrs;       /* array of ngx_mail_conf_addr_t */
+} ngx_mail_conf_port_t;
 
 
 typedef struct {
-    in_addr_t               addr;
+    struct sockaddr        *sockaddr;
+    socklen_t               socklen;
+
     ngx_mail_conf_ctx_t    *ctx;
+
     unsigned                bind:1;
-} ngx_mail_conf_in_addr_t;
+    unsigned                wildcard:1;
+#if (NGX_MAIL_SSL)
+    unsigned                ssl:1;
+#endif
+#if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
+    unsigned                ipv6only:2;
+#endif
+} ngx_mail_conf_addr_t;
 
 
 typedef struct {
@@ -127,8 +162,13 @@ typedef enum {
     ngx_smtp_auth_plain,
     ngx_smtp_auth_cram_md5,
     ngx_smtp_helo,
-    ngx_smtp_noxclient,
-    ngx_smtp_xclient
+    ngx_smtp_helo_xclient,
+    ngx_smtp_helo_from,
+    ngx_smtp_xclient,
+    ngx_smtp_xclient_from,
+    ngx_smtp_xclient_helo,
+    ngx_smtp_from,
+    ngx_smtp_to
 } ngx_smtp_state_e;
 
 
@@ -178,6 +218,8 @@ typedef struct {
     ngx_str_t              *addr_text;
     ngx_str_t               host;
     ngx_str_t               smtp_helo;
+    ngx_str_t               smtp_from;
+    ngx_str_t               smtp_to;
 
     ngx_uint_t              command;
     ngx_array_t             args;
@@ -248,12 +290,14 @@ typedef struct {
 #define NGX_MAIL_AUTH_LOGIN_USERNAME    2
 #define NGX_MAIL_AUTH_APOP              3
 #define NGX_MAIL_AUTH_CRAM_MD5          4
+#define NGX_MAIL_AUTH_NONE              5
 
 
 #define NGX_MAIL_AUTH_PLAIN_ENABLED     0x0002
 #define NGX_MAIL_AUTH_LOGIN_ENABLED     0x0004
 #define NGX_MAIL_AUTH_APOP_ENABLED      0x0008
 #define NGX_MAIL_AUTH_CRAM_MD5_ENABLED  0x0010
+#define NGX_MAIL_AUTH_NONE_ENABLED      0x0020
 
 
 #define NGX_MAIL_PARSE_INVALID_COMMAND  20

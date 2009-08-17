@@ -10,6 +10,7 @@
 
 #define NGX_HTTP_MAX_URI_CHANGES           10
 #define NGX_HTTP_MAX_SUBREQUESTS           50
+#define NGX_HTTP_MAX_CAPTURES              9
 
 /* must be 2^n */
 #define NGX_HTTP_LC_HEADER_LEN             32
@@ -58,6 +59,7 @@
 
 #define NGX_HTTP_ZERO_IN_URI               1
 #define NGX_HTTP_SUBREQUEST_IN_MEMORY      2
+#define NGX_HTTP_SUBREQUEST_WAITED         4
 
 
 #define NGX_HTTP_OK                        200
@@ -214,6 +216,7 @@ typedef struct {
     unsigned                          connection_type:2;
     unsigned                          msie:1;
     unsigned                          msie4:1;
+    unsigned                          msie6:1;
     unsigned                          opera:1;
     unsigned                          gecko:1;
     unsigned                          konqueror:1;
@@ -244,6 +247,8 @@ typedef struct {
     size_t                            content_type_len;
     ngx_str_t                         content_type;
     ngx_str_t                         charset;
+    u_char                           *content_type_lowcase;
+    ngx_uint_t                        content_type_hash;
 
     ngx_array_t                       cache_control;
 
@@ -318,6 +323,14 @@ struct ngx_http_postponed_request_s {
 };
 
 
+typedef struct ngx_http_posted_request_s  ngx_http_posted_request_t;
+
+struct ngx_http_posted_request_s {
+    ngx_http_request_t               *request;
+    ngx_http_posted_request_t        *next;
+};
+
+
 typedef ngx_int_t (*ngx_http_handler_pt)(ngx_http_request_t *r);
 typedef void (*ngx_http_event_handler_pt)(ngx_http_request_t *r);
 
@@ -335,7 +348,9 @@ struct ngx_http_request_s {
     ngx_http_event_handler_pt         read_event_handler;
     ngx_http_event_handler_pt         write_event_handler;
 
+#if (NGX_HTTP_CACHE)
     ngx_http_cache_t                 *cache;
+#endif
 
     ngx_http_upstream_t              *upstream;
     ngx_array_t                      *upstream_states;
@@ -370,10 +385,8 @@ struct ngx_http_request_s {
     ngx_http_request_t               *parent;
     ngx_http_postponed_request_t     *postponed;
     ngx_http_post_subrequest_t       *post_subrequest;
+    ngx_http_posted_request_t        *posted_requests;
 
-    uint32_t                          in_addr;
-    ngx_uint_t                        port;
-    ngx_str_t                        *port_text;    /* ":80" */
     ngx_http_virtual_names_t         *virtual_names;
 
     ngx_int_t                         phase_handler;
@@ -381,6 +394,12 @@ struct ngx_http_request_s {
     ngx_uint_t                        access_code;
 
     ngx_http_variable_value_t        *variables;
+
+#if (NGX_PCRE)
+    ngx_uint_t                        ncaptures;
+    int                              *captures;
+    u_char                           *captures_data;
+#endif
 
     size_t                            limit_rate;
 
@@ -425,30 +444,25 @@ struct ngx_http_request_s {
     unsigned                          request_body_file_group_access:1;
     unsigned                          request_body_file_log_level:3;
 
-    unsigned                          fast_subrequest:1;
     unsigned                          subrequest_in_memory:1;
+    unsigned                          waited:1;
 
+#if (NGX_HTTP_CACHE)
+    unsigned                          cached:1;
+#endif
     unsigned                          gzip:2;
 
     unsigned                          proxy:1;
     unsigned                          bypass_cache:1;
     unsigned                          no_cache:1;
 
-#if (NGX_HTTP_REALIP)
-
     /*
-     * instead of using the request context data in ngx_http_realip_module
-     * we use the single bit in the request structure
-     */
-    unsigned                          realip_set:1;
-
-#endif
-
-    /*
-     * instead of using the request context data in ngx_http_limit_zone_module
-     * we use the single bit in the request structure
+     * instead of using the request context data in
+     * ngx_http_limit_zone_module and ngx_http_limit_req_module
+     * we use the single bits in the request structure
      */
     unsigned                          limit_zone_set:1;
+    unsigned                          limit_req_set:1;
 
 #if 0
     unsigned                          cacheable:1;
@@ -464,12 +478,16 @@ struct ngx_http_request_s {
     unsigned                          discard_body:1;
     unsigned                          internal:1;
     unsigned                          error_page:1;
+    unsigned                          ignore_content_encoding:1;
+    unsigned                          filter_finalize:1;
     unsigned                          post_action:1;
     unsigned                          request_complete:1;
     unsigned                          request_output:1;
     unsigned                          header_sent:1;
     unsigned                          expect_tested:1;
+    unsigned                          root_tested:1;
     unsigned                          done:1;
+    unsigned                          logged:1;
     unsigned                          utf8:1;
 
     unsigned                          buffered:4;

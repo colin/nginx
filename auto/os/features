@@ -98,7 +98,7 @@ if test -z "$NGX_KQUEUE_CHECKED"; then
         ngx_feature_name="NGX_HAVE_TIMER_EVENT"
         ngx_feature_run=yes
         ngx_feature_incs="#include <sys/event.h>
-#include <sys/time.h>"
+                          #include <sys/time.h>"
         ngx_feature_path=
         ngx_feature_libs=
         ngx_feature_test="int      kq;
@@ -122,36 +122,6 @@ if test -z "$NGX_KQUEUE_CHECKED"; then
                   if (kev.flags & EV_ERROR) return 1;"
 
         . auto/feature
-
-
-        if [ "$NGX_SYSTEM" = "Darwin" ]; then
-
-            ngx_feature="Darwin 64-bit kqueue millisecond timeout bug"
-            ngx_feature_name=NGX_DARWIN_KEVENT_BUG
-            ngx_feature_run=bug
-            ngx_feature_incs="#include <sys/event.h>
-#include <sys/time.h>"
-            ngx_feature_path=
-            ngx_feature_libs=
-            ngx_feature_test="int  kq;
-                  struct kevent    kev;
-                  struct timespec  ts;
-                  struct timeval   tv, tv0;
-
-                  kq = kqueue();
-
-                  ts.tv_sec = 0;
-                  ts.tv_nsec = 999000000;
-
-                  gettimeofday(&tv, 0);
-                  kevent(kq, NULL, 0, &kev, 1, &ts);
-                  gettimeofday(&tv0, 0);
-                  timersub(&tv0, &tv, &tv);
-
-                  if (tv.tv_sec * 1000000 + tv.tv_usec < 900000) return 1;"
-
-            . auto/feature
-        fi
     fi
 fi
 
@@ -198,5 +168,109 @@ if [ $ngx_found = no ]; then
 
     if [ $ngx_found = yes ]; then
         CRYPT_LIB="-lcrypt"
+    fi
+fi
+
+
+ngx_feature="O_DIRECT"
+ngx_feature_name="NGX_HAVE_O_DIRECT"
+ngx_feature_run=no
+ngx_feature_incs="#include <fcntl.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="fcntl(0, F_SETFL, O_DIRECT);"
+. auto/feature
+
+
+if [ $ngx_found = yes -a "$NGX_SYSTEM" = "Linux" ]; then
+    have=NGX_HAVE_ALIGNED_DIRECTIO . auto/have
+fi
+
+ngx_feature="F_NOCACHE"
+ngx_feature_name="NGX_HAVE_F_NOCACHE"
+ngx_feature_run=no
+ngx_feature_incs="#include <fcntl.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="fcntl(0, F_NOCACHE, 1);"
+. auto/feature
+
+
+ngx_feature="directio()"
+ngx_feature_name="NGX_HAVE_DIRECTIO"
+ngx_feature_run=no
+ngx_feature_incs="#include <sys/types.h>
+                  #include <sys/fcntl.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="directio(0, DIRECTIO_ON);"
+. auto/feature
+
+
+ngx_feature="statfs()"
+ngx_feature_name="NGX_HAVE_STATFS"
+ngx_feature_run=no
+ngx_feature_incs="$NGX_INCLUDE_SYS_PARAM_H
+                  $NGX_INCLUDE_SYS_MOUNT_H
+                  $NGX_INCLUDE_SYS_VFS_H"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="struct statfs  fs;
+                  statfs(NULL, &fs);"
+. auto/feature
+
+
+ngx_feature="statvfs()"
+ngx_feature_name="NGX_HAVE_STATVFS"
+ngx_feature_run=no
+ngx_feature_incs="#include <sys/types.h>
+                  #include <sys/statvfs.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="struct statvfs  fs;
+                  statvfs(NULL, &fs);"
+. auto/feature
+
+
+ngx_feature="dlopen()"
+ngx_feature_name=
+ngx_feature_run=no
+ngx_feature_incs="#include <dlfcn.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="dlopen(NULL, 0)"
+. auto/feature
+
+
+if [ $ngx_found != yes ]; then
+
+    ngx_feature="dlopen() in libdl"
+    ngx_feature_libs="-ldl"
+    . auto/feature
+
+    if [ $ngx_found = yes ]; then
+        NGX_LIBDL="-ldl"
+    fi
+fi
+
+
+ngx_feature="sched_yield()"
+ngx_feature_name="NGX_HAVE_SCHED_YIELD"
+ngx_feature_run=no
+ngx_feature_incs="#include <sched.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="sched_yield()"
+. auto/feature
+
+
+if [ $ngx_found != yes ]; then
+
+    ngx_feature="sched_yield() in librt"
+    ngx_feature_libs="-lrt"
+    . auto/feature
+
+    if [ $ngx_found = yes ]; then
+        CORE_LIBS="$CORE_LIBS -lrt"
     fi
 fi

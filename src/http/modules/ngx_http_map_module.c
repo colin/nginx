@@ -106,7 +106,7 @@ ngx_http_map_variable(ngx_http_request_t *r, ngx_http_variable_value_t *v,
 
     size_t                      len;
     u_char                     *name;
-    ngx_uint_t                  key, i;
+    ngx_uint_t                  key;
     ngx_http_variable_value_t  *vv, *value;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -130,16 +130,12 @@ ngx_http_map_variable(ngx_http_request_t *r, ngx_http_variable_value_t *v,
         return NGX_OK;
     }
 
-    name = ngx_palloc(r->pool, len);
+    name = ngx_pnalloc(r->pool, len);
     if (name == NULL) {
         return NGX_ERROR;
     }
 
-    key = 0;
-    for (i = 0; i < len; i++) {
-        name[i] = ngx_tolower(vv->data[i]);
-        key = ngx_hash(key, name[i]);
-    }
+    key = ngx_hash_strlow(name, vv->data, len);
 
     value = ngx_hash_find_combined(&map->hash, key, name, len);
 
@@ -378,7 +374,7 @@ ngx_http_map(ngx_conf_t *cf, ngx_command_t *dummy, void *conf)
     if (ngx_strcmp(value[0].data, "include") == 0) {
         file = value[1];
 
-        if (ngx_conf_full_name(cf->cycle, &file, 1) == NGX_ERROR){
+        if (ngx_conf_full_name(cf->cycle, &file, 1) != NGX_OK){
             return NGX_CONF_ERROR;
         }
 

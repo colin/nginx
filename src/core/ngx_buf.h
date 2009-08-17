@@ -51,8 +51,6 @@ struct ngx_buf_s {
     unsigned         last_shadow:1;
     unsigned         temp_file:1;
 
-    unsigned         zerocopy_busy:1;
-
     /* STUB */ int   num;
 };
 
@@ -78,6 +76,10 @@ typedef struct {
     ngx_chain_t                 *busy;
 
     unsigned                     sendfile;
+    unsigned                     directio;
+#if (NGX_HAVE_ALIGNED_DIRECTIO)
+    unsigned                     unaligned;
+#endif
     unsigned                     need_in_memory;
     unsigned                     need_in_temp;
 

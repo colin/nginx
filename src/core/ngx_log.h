@@ -195,13 +195,16 @@ void ngx_cdecl ngx_log_debug_core(ngx_log_t *log, ngx_err_t err,
 
 /*********************************/
 
-ngx_log_t *ngx_log_init(void);
-ngx_log_t *ngx_log_create_errlog(ngx_cycle_t *cycle, ngx_array_t *args);
-char *ngx_set_error_log_levels(ngx_conf_t *cf, ngx_log_t *log);
-void ngx_log_abort(ngx_err_t err, const char *text, void *param);
+ngx_log_t *ngx_log_init(u_char *prefix);
+ngx_log_t *ngx_log_create(ngx_cycle_t *cycle, ngx_str_t *name);
+char *ngx_log_set_levels(ngx_conf_t *cf, ngx_log_t *log);
+void ngx_cdecl ngx_log_abort(ngx_err_t err, const char *fmt, ...);
+void ngx_cdecl ngx_log_stderr(ngx_err_t err, const char *fmt, ...);
+u_char *ngx_log_errno(u_char *buf, u_char *last, ngx_err_t err);
 
 
 extern ngx_module_t  ngx_errlog_module;
+extern ngx_uint_t    ngx_use_stderr;
 
 
 #endif /* _NGX_LOG_H_INCLUDED_ */

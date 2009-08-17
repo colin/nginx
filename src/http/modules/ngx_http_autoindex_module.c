@@ -25,8 +25,11 @@ typedef struct {
 typedef struct {
     ngx_str_t      name;
     size_t         utf_len;
-    ngx_uint_t     escape;
-    ngx_uint_t     dir;
+    size_t         escape;
+
+    unsigned       dir:1;
+    unsigned       colon:1;
+
     time_t         mtime;
     off_t          size;
 } ngx_http_autoindex_entry_t;
@@ -157,7 +160,6 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
         return NGX_DECLINED;
     }
 
-    /* TODO: Win32 */
     if (r->zero_in_uri) {
         return NGX_DECLINED;
     }
@@ -282,7 +284,7 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
                 allocated = path.len + 1 + len + 1
                                      + NGX_HTTP_AUTOINDEX_PREALLOCATE;
 
-                filename = ngx_palloc(pool, allocated);
+                filename = ngx_pnalloc(pool, allocated);
                 if (filename == NULL) {
                     return ngx_http_autoindex_error(r, &dir, &path);
                 }
@@ -323,7 +325,7 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
 
         entry->name.len = len;
 
-        entry->name.data = ngx_palloc(pool, len + 1);
+        entry->name.data = ngx_pnalloc(pool, len + 1);
         if (entry->name.data == NULL) {
             return ngx_http_autoindex_error(r, &dir, &path);
         }
@@ -338,6 +340,8 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
         } else {
             entry->utf_len = len;
         }
+
+        entry->colon = (ngx_strchr(entry->name.data, ':') != NULL);
 
         entry->dir = ngx_de_is_dir(&dir);
         entry->mtime = ngx_de_mtime(&dir);
@@ -364,7 +368,7 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
             + entry[i].name.len + entry[i].escape
             + 1                                          /* 1 is for "/" */
             + sizeof("\">") - 1
-            + entry[i].name.len - entry[i].utf_len
+            + entry[i].name.len - entry[i].utf_len + entry[i].colon * 2
             + NGX_HTTP_AUTOINDEX_NAME_LEN + sizeof("&gt;") - 2
             + sizeof("</a>") - 1
             + sizeof(" 28-Sep-1970 12:00 ") - 1
@@ -396,6 +400,11 @@ ngx_http_autoindex_handler(ngx_http_request_t *r)
 
     for (i = 0; i < entries.nelts; i++) {
         b->last = ngx_cpymem(b->last, "<a href=\"", sizeof("<a href=\"") - 1);
+
+        if (entry[i].colon) {
+            *b->last++ = '.';
+            *b->last++ = '/';
+        }
 
         if (entry[i].escape) {
             ngx_escape_uri(b->last, entry[i].name.data, entry[i].name.len,

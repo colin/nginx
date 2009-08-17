@@ -275,14 +275,16 @@ static ngx_str_t ngx_http_error_pages[] = {
 
     ngx_null_string,                     /* 201, 204 */
 
-#define NGX_HTTP_LEVEL_200  1
+#define NGX_HTTP_LAST_LEVEL_200  202
+#define NGX_HTTP_LEVEL_200       (NGX_HTTP_LAST_LEVEL_200 - 201)
 
     /* ngx_null_string, */               /* 300 */
     ngx_string(ngx_http_error_301_page),
     ngx_string(ngx_http_error_302_page),
     ngx_null_string,                     /* 303 */
 
-#define NGX_HTTP_LEVEL_300  3
+#define NGX_HTTP_LAST_LEVEL_300  304
+#define NGX_HTTP_LEVEL_300       (NGX_HTTP_LAST_LEVEL_300 - 301)
 
     ngx_string(ngx_http_error_400_page),
     ngx_string(ngx_http_error_401_page),
@@ -302,7 +304,8 @@ static ngx_str_t ngx_http_error_pages[] = {
     ngx_string(ngx_http_error_415_page),
     ngx_string(ngx_http_error_416_page),
 
-#define NGX_HTTP_LEVEL_400  17
+#define NGX_HTTP_LAST_LEVEL_400  417
+#define NGX_HTTP_LEVEL_400       (NGX_HTTP_LAST_LEVEL_400 - 400)
 
     ngx_string(ngx_http_error_495_page), /* 495, https certificate error */
     ngx_string(ngx_http_error_496_page), /* 496, https no certificate */
@@ -318,6 +321,9 @@ static ngx_str_t ngx_http_error_pages[] = {
     ngx_null_string,                     /* 505 */
     ngx_null_string,                     /* 506 */
     ngx_string(ngx_http_error_507_page)
+
+#define NGX_HTTP_LAST_LEVEL_500  508
+
 };
 
 
@@ -331,12 +337,13 @@ ngx_http_special_response_handler(ngx_http_request_t *r, ngx_int_t error)
     ngx_http_err_page_t       *err_page;
     ngx_http_core_loc_conf_t  *clcf;
 
-    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "http special response: %d, \"%V\"", error, &r->uri);
+    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "http special response: %d, \"%V?%V\"",
+                   error, &r->uri, &r->args);
 
     r->err_status = error;
 
-    if (r->keepalive != 0) {
+    if (r->keepalive) {
         switch (error) {
             case NGX_HTTP_BAD_REQUEST:
             case NGX_HTTP_REQUEST_ENTITY_TOO_LARGE:
@@ -401,16 +408,22 @@ ngx_http_special_response_handler(ngx_http_request_t *r, ngx_int_t error)
         /* 204 */
         err = 0;
 
-    } else if (error < NGX_HTTP_BAD_REQUEST) {
+    } else if (error >= NGX_HTTP_MOVED_PERMANENTLY
+               && error < NGX_HTTP_LAST_LEVEL_300)
+    {
         /* 3XX */
         err = error - NGX_HTTP_MOVED_PERMANENTLY + NGX_HTTP_LEVEL_200;
 
-    } else if (error < NGX_HTTP_OWN_CODES) {
+    } else if (error >= NGX_HTTP_BAD_REQUEST
+               && error < NGX_HTTP_LAST_LEVEL_400)
+    {
         /* 4XX */
         err = error - NGX_HTTP_BAD_REQUEST + NGX_HTTP_LEVEL_200
                                            + NGX_HTTP_LEVEL_300;
 
-    } else {
+    } else if (error >= NGX_HTTP_OWN_CODES
+               && error < NGX_HTTP_LAST_LEVEL_500)
+    {
         /* 49X, 5XX */
         err = error - NGX_HTTP_OWN_CODES + NGX_HTTP_LEVEL_200
                                          + NGX_HTTP_LEVEL_300
@@ -422,18 +435,77 @@ ngx_http_special_response_handler(ngx_http_request_t *r, ngx_int_t error)
                 r->err_status = NGX_HTTP_BAD_REQUEST;
                 break;
         }
+
+    } else {
+        /* unknown code, zero body */
+        err = 0;
     }
 
     return ngx_http_send_special_response(r, clcf, err);
 }
 
 
+ngx_int_t
+ngx_http_filter_finalize_request(ngx_http_request_t *r, ngx_module_t *m,
+    ngx_int_t error)
+{
+    void       *ctx;
+    ngx_int_t   rc;
+
+    ngx_http_clean_header(r);
+
+    ctx = NULL;
+
+    if (m) {
+        ctx = r->ctx[m->ctx_index];
+    }
+
+    /* clear the modules contexts */
+    ngx_memzero(r->ctx, sizeof(void *) * ngx_http_max_module);
+
+    if (m) {
+        r->ctx[m->ctx_index] = ctx;
+    }
+
+    r->filter_finalize = 1;
+
+    rc = ngx_http_special_response_handler(r, error);
+
+    /* NGX_ERROR resets any pending data */
+
+    switch (rc) {
+
+    case NGX_OK:
+    case NGX_DONE:
+        return NGX_ERROR;
+
+    default:
+        return rc;
+    }
+}
+
+
+void
+ngx_http_clean_header(ngx_http_request_t *r)
+{
+    ngx_memzero(&r->headers_out.status,
+                sizeof(ngx_http_headers_out_t)
+                    - offsetof(ngx_http_headers_out_t, status));
+
+    r->headers_out.headers.part.nelts = 0;
+    r->headers_out.headers.part.next = NULL;
+    r->headers_out.headers.last = &r->headers_out.headers.part;
+
+    r->headers_out.content_length_n = -1;
+    r->headers_out.last_modified_time = -1;
+}
+
+
 static ngx_int_t
 ngx_http_send_error_page(ngx_http_request_t *r, ngx_http_err_page_t *err_page)
 {
-    u_char                     ch, *p, *last;
     ngx_int_t                  overwrite;
-    ngx_str_t                 *uri, *args, u, a;
+    ngx_str_t                  uri, args;
     ngx_table_elt_t           *location;
     ngx_http_core_loc_conf_t  *clcf;
 
@@ -447,67 +519,29 @@ ngx_http_send_error_page(ngx_http_request_t *r, ngx_http_err_page_t *err_page)
 
     r->zero_in_uri = 0;
 
-    if (err_page->uri_lengths) {
-        if (ngx_http_script_run(r, &u, err_page->uri_lengths->elts, 0,
-                                err_page->uri_values->elts)
-            == NULL)
-        {
-            return NGX_ERROR;
-        }
-
-        p = u.data;
-        uri = &u;
-        args = NULL;
-
-        if (*p == '/') {
-
-            last = p + uri->len;
-
-            while (p < last) {
-
-                ch = *p++;
-
-                if (ch == '?') {
-                    a.len = last - p;
-                    a.data = p;
-                    args = &a;
-
-                    u.len = p - 1 - u.data;
-
-                    while (p < last) {
-                        if (*p++ == '\0') {
-                            r->zero_in_uri = 1;
-                            break;
-                        }
-                    }
-
-                    break;
-                }
-
-                if (ch == '\0') {
-                    r->zero_in_uri = 1;
-                    continue;
-                }
-            }
-        }
-
-    } else {
-        uri = &err_page->uri;
-        args = &err_page->args;
+    if (ngx_http_complex_value(r, &err_page->value, &uri) != NGX_OK) {
+        return NGX_ERROR;
     }
 
-    if (uri->data[0] == '/') {
+    if (uri.data[0] == '/') {
+
+        if (err_page->value.lengths) {
+            ngx_http_split_args(r, &uri, &args);
+
+        } else {
+            args = err_page->args;
+        }
 
         if (r->method != NGX_HTTP_HEAD) {
             r->method = NGX_HTTP_GET;
             r->method_name = ngx_http_get_name;
         }
 
-        return ngx_http_internal_redirect(r, uri, args);
+        return ngx_http_internal_redirect(r, &uri, &args);
     }
 
-    if (uri->data[0] == '@') {
-        return ngx_http_named_location(r, uri);
+    if (uri.data[0] == '@') {
+        return ngx_http_named_location(r, &uri);
     }
 
     location = ngx_list_push(&r->headers_out.headers);
@@ -521,7 +555,7 @@ ngx_http_send_error_page(ngx_http_request_t *r, ngx_http_err_page_t *err_page)
     location->hash = 1;
     location->key.len = sizeof("Location") - 1;
     location->key.data = (u_char *) "Location";
-    location->value = *uri;
+    location->value = uri;
 
     r->headers_out.location = location;
 
@@ -576,6 +610,7 @@ ngx_http_send_special_response(ngx_http_request_t *r,
             r->headers_out.content_type_len = sizeof("text/html") - 1;
             r->headers_out.content_type.len = sizeof("text/html") - 1;
             r->headers_out.content_type.data = (u_char *) "text/html";
+            r->headers_out.content_type_lowcase = NULL;
 
         } else {
             r->headers_out.content_length_n = -1;
@@ -678,6 +713,7 @@ ngx_http_send_refresh(ngx_http_request_t *r)
     r->headers_out.content_type_len = sizeof("text/html") - 1;
     r->headers_out.content_type.len = sizeof("text/html") - 1;
     r->headers_out.content_type.data = (u_char *) "text/html";
+    r->headers_out.content_type_lowcase = NULL;
 
     r->headers_out.location->hash = 0;
     r->headers_out.location = NULL;

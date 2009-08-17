@@ -46,7 +46,7 @@ ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
 
     file->name.len = path->name.len + 1 + path->len + 10;
 
-    file->name.data = ngx_palloc(pool, file->name.len + 1);
+    file->name.data = ngx_pnalloc(pool, file->name.len + 1);
     if (file->name.data == NULL) {
         return NGX_ERROR;
     }
@@ -259,12 +259,12 @@ ngx_conf_set_path_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         path->name.len--;
     }
 
-    if (ngx_conf_full_name(cf->cycle, &path->name, 0) == NGX_ERROR) {
+    if (ngx_conf_full_name(cf->cycle, &path->name, 0) != NGX_OK) {
         return NULL;
     }
 
     path->len = 0;
-    path->cleaner = (ngx_gc_handler_pt) cmd->post;
+    path->manager = (ngx_path_manager_pt) cmd->post;
     path->conf_file = cf->conf_file->file.name.data;
     path->line = cf->conf_file->line;
 
@@ -285,6 +285,49 @@ ngx_conf_set_path_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     *slot = path;
 
     if (ngx_add_path(cf, slot) == NGX_ERROR) {
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}
+
+
+char *
+ngx_conf_merge_path_value(ngx_conf_t *cf, ngx_path_t **path, ngx_path_t *prev,
+    ngx_path_init_t *init)
+{
+    if (*path) {
+        return NGX_CONF_OK;
+    }
+
+    if (prev) {
+        *path = prev;
+        return NGX_CONF_OK;
+    }
+
+    *path = ngx_palloc(cf->pool, sizeof(ngx_path_t));
+    if (*path == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    (*path)->name = init->name;
+
+    if (ngx_conf_full_name(cf->cycle, &(*path)->name, 0) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+
+    (*path)->level[0] = init->level[0];
+    (*path)->level[1] = init->level[1];
+    (*path)->level[2] = init->level[2];
+
+    (*path)->len = init->level[0] + (init->level[0] ? 1 : 0)
+                   + init->level[1] + (init->level[1] ? 1 : 0)
+                   + init->level[2] + (init->level[2] ? 1 : 0);
+
+    (*path)->manager = NULL;
+    (*path)->conf_file = NULL;
+
+    if (ngx_add_path(cf, path) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
 
@@ -446,7 +489,9 @@ ngx_create_pathes(ngx_cycle_t *cycle, ngx_uid_t user)
         {
         ngx_file_info_t   fi;
 
-        if (ngx_file_info((const char *) path[i]->name.data, &fi) == -1) {
+        if (ngx_file_info((const char *) path[i]->name.data, &fi)
+            == NGX_FILE_ERROR)
+        {
             ngx_log_error(NGX_LOG_EMERG, cycle->log, ngx_errno,
                           ngx_file_info_n " \"%s\" failed", path[i]->name.data);
             return NGX_ERROR;
@@ -487,11 +532,13 @@ ngx_ext_rename_file(ngx_str_t *src, ngx_str_t *to, ngx_ext_rename_file_t *ext)
 
 #if !(NGX_WIN32)
 
-    if (ngx_change_file_access(src->data, ext->access) == NGX_FILE_ERROR) {
-        ngx_log_error(NGX_LOG_CRIT, ext->log, ngx_errno,
-                      ngx_change_file_access_n " \"%s\" failed", src->data);
-        err = 0;
-        goto failed;
+    if (ext->access) {
+        if (ngx_change_file_access(src->data, ext->access) == NGX_FILE_ERROR) {
+            ngx_log_error(NGX_LOG_CRIT, ext->log, ngx_errno,
+                          ngx_change_file_access_n " \"%s\" failed", src->data);
+            err = 0;
+            goto failed;
+        }
     }
 
 #endif
@@ -511,13 +558,19 @@ ngx_ext_rename_file(ngx_str_t *src, ngx_str_t *to, ngx_ext_rename_file_t *ext)
 
     err = ngx_errno;
 
-    if (err == NGX_ENOENT) {
-
+    if (err
+#if (NGX_WIN32)
+            == ERROR_PATH_NOT_FOUND
+#else
+            == NGX_ENOENT
+#endif
+       )
+    {
         if (!ext->create_path) {
             goto failed;
         }
 
-        err = ngx_create_full_path(to->data, ngx_dir_access(ext->access));
+        err = ngx_create_full_path(to->data, ngx_dir_access(ext->path_access));
 
         if (err) {
             ngx_log_error(NGX_LOG_CRIT, ext->log, err,
@@ -561,11 +614,13 @@ failed:
         }
     }
 
-    if (err) {
+    if (err && ext->log_rename_error) {
         ngx_log_error(NGX_LOG_CRIT, ext->log, err,
                       ngx_rename_file_n " \"%s\" to \"%s\" failed",
                       src->data, to->data);
     }
+
+    ext->rename_error = err;
 
     return NGX_ERROR;
 }

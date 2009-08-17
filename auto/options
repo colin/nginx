@@ -43,6 +43,8 @@ EVENT_AIO=NO
 
 USE_THREADS=NO
 
+NGX_IPV6=NO
+
 HTTP=YES
 
 NGX_HTTP_LOG_PATH=
@@ -50,12 +52,15 @@ NGX_HTTP_CLIENT_TEMP_PATH=
 NGX_HTTP_PROXY_TEMP_PATH=
 NGX_HTTP_FASTCGI_TEMP_PATH=
 
+HTTP_CACHE=YES
 HTTP_CHARSET=YES
 HTTP_GZIP=YES
 HTTP_SSL=NO
 HTTP_SSI=YES
 HTTP_POSTPONE=NO
 HTTP_REALIP=NO
+HTTP_XSLT=NO
+HTTP_IMAGE_FILTER=NO
 HTTP_SUB=NO
 HTTP_ADDITION=NO
 HTTP_DAV=NO
@@ -63,6 +68,7 @@ HTTP_ACCESS=YES
 HTTP_AUTH_BASIC=YES
 HTTP_USERID=YES
 HTTP_AUTOINDEX=YES
+HTTP_RANDOM_INDEX=NO
 HTTP_STATUS=NO
 HTTP_GEO=YES
 HTTP_MAP=YES
@@ -73,8 +79,10 @@ HTTP_FASTCGI=YES
 HTTP_PERL=NO
 HTTP_MEMCACHED=YES
 HTTP_LIMIT_ZONE=YES
+HTTP_LIMIT_REQ=YES
 HTTP_EMPTY_GIF=YES
 HTTP_BROWSER=YES
+HTTP_SECURE_LINK=NO
 HTTP_FLV=NO
 HTTP_GZIP_STATIC=NO
 HTTP_UPSTREAM_IP_HASH=YES
@@ -115,7 +123,11 @@ ZLIB_ASM=NO
 USE_PERL=NO
 NGX_PERL=perl
 
+USE_LIBXSLT=NO
+USE_LIBGD=NO
+
 NGX_GOOGLE_PERFTOOLS=NO
+NGX_CPP_TEST=NO
 
 NGX_CPU_CACHE_LINE=
 
@@ -133,6 +145,7 @@ do
     case "$option" in
         --help)                          help=yes                   ;;
 
+        --prefix=)                       NGX_PREFIX="!"             ;;
         --prefix=*)                      NGX_PREFIX="$value"        ;;
         --sbin-path=*)                   NGX_SBIN_PATH="$value"     ;;
         --conf-path=*)                   NGX_CONF_PATH="$value"     ;;
@@ -156,7 +169,11 @@ do
         #--with-threads=*)                USE_THREADS="$value"       ;;
         #--with-threads)                  USE_THREADS="pthreads"     ;;
 
+        --with-ipv6)                     NGX_IPV6=YES               ;;
+
         --without-http)                  HTTP=NO                    ;;
+        --without-http-cache)            HTTP_CACHE=NO              ;;
+
         --http-log-path=*)               NGX_HTTP_LOG_PATH="$value" ;;
         --http-client-body-temp-path=*)  NGX_HTTP_CLIENT_TEMP_PATH="$value" ;;
         --http-proxy-temp-path=*)        NGX_HTTP_PROXY_TEMP_PATH="$value" ;;
@@ -165,10 +182,14 @@ do
         --with-http_ssl_module)          HTTP_SSL=YES               ;;
         --with-http_realip_module)       HTTP_REALIP=YES            ;;
         --with-http_addition_module)     HTTP_ADDITION=YES          ;;
+        --with-http_xslt_module)         HTTP_XSLT=YES              ;;
+        --with-http_image_filter_module) HTTP_IMAGE_FILTER=YES      ;;
         --with-http_sub_module)          HTTP_SUB=YES               ;;
         --with-http_dav_module)          HTTP_DAV=YES               ;;
         --with-http_flv_module)          HTTP_FLV=YES               ;;
         --with-http_gzip_static_module)  HTTP_GZIP_STATIC=YES       ;;
+        --with-http_random_index_module) HTTP_RANDOM_INDEX=YES      ;;
+        --with-http_secure_link_module)  HTTP_SECURE_LINK=YES       ;;
 
         --without-http_charset_module)   HTTP_CHARSET=NO            ;;
         --without-http_gzip_module)      HTTP_GZIP=NO               ;;
@@ -186,6 +207,7 @@ do
         --without-http_fastcgi_module)   HTTP_FASTCGI=NO            ;;
         --without-http_memcached_module) HTTP_MEMCACHED=NO          ;;
         --without-http_limit_zone_module) HTTP_LIMIT_ZONE=NO        ;;
+        --without-http_limit_req_module) HTTP_LIMIT_REQ=NO         ;;
         --without-http_empty_gif_module) HTTP_EMPTY_GIF=NO          ;;
         --without-http_browser_module)   HTTP_BROWSER=NO            ;;
         --without-http_upstream_ip_hash_module) HTTP_UPSTREAM_IP_HASH=NO ;;
@@ -207,6 +229,7 @@ do
         --without-mail_smtp_module)      MAIL_SMTP=NO               ;;
 
         --with-google_perftools_module)  NGX_GOOGLE_PERFTOOLS=YES   ;;
+        --with-cpp_test_module)          NGX_CPP_TEST=YES           ;;
 
         --add-module=*)                  NGX_ADDONS="$NGX_ADDONS $value" ;;
 
@@ -280,13 +303,19 @@ cat << END
   --with-poll_module                 enable poll module
   --without-poll_module              disable poll module
 
+  --with-ipv6                        enable ipv6 support
+
   --with-http_ssl_module             enable ngx_http_ssl_module
   --with-http_realip_module          enable ngx_http_realip_module
   --with-http_addition_module        enable ngx_http_addition_module
+  --with-http_xslt_module            enable ngx_http_xslt_module
+  --with-http_image_filter_module    enable ngx_http_image_filter_module
   --with-http_sub_module             enable ngx_http_sub_module
   --with-http_dav_module             enable ngx_http_dav_module
   --with-http_flv_module             enable ngx_http_flv_module
   --with-http_gzip_static_module     enable ngx_http_gzip_static_module
+  --with-http_random_index_module    enable ngx_http_random_index_module
+  --with-http_secure_link_module     enable ngx_http_secure_link_module
   --with-http_stub_status_module     enable ngx_http_stub_status_module
 
   --without-http_charset_module      disable ngx_http_charset_module
@@ -304,6 +333,7 @@ cat << END
   --without-http_fastcgi_module      disable ngx_http_fastcgi_module
   --without-http_memcached_module    disable ngx_http_memcached_module
   --without-http_limit_zone_module   disable ngx_http_limit_zone_module
+  --without-http_limit_req_module    disable ngx_http_limit_req_module
   --without-http_empty_gif_module    disable ngx_http_empty_gif_module
   --without-http_browser_module      disable ngx_http_browser_module
   --without-http_upstream_ip_hash_module
@@ -321,6 +351,7 @@ cat << END
                                      files
 
   --without-http                     disable HTTP server
+  --without-http-cache               disable HTTP cache
 
   --with-mail                        enable POP3/IMAP4/SMTP proxy module
   --with-mail_ssl_module             enable ngx_mail_ssl_module
@@ -329,6 +360,7 @@ cat << END
   --without-mail_smtp_module         disable ngx_mail_smtp_module
 
   --with-google_perftools_module     enable ngx_google_perftools_module
+  --with-cpp_test_module             enable ngx_cpp_test_module
 
   --add-module=PATH                  enable an external module
 
@@ -388,141 +420,21 @@ if [ ".$NGX_PLATFORM" = ".win32" ]; then
 fi
 
 
-NGX_PREFIX=${NGX_PREFIX:-/usr/local/nginx}
-
-
-case ".$NGX_SBIN_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_SBIN_PATH=$NGX_PREFIX/sbin/nginx
-    ;;
-
-    *)
-        NGX_SBIN_PATH=$NGX_PREFIX/$NGX_SBIN_PATH
-    ;;
-esac
-
-
-case ".$NGX_CONF_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_CONF_PATH=$NGX_PREFIX/conf/nginx.conf
-    ;;
-
-    *)
-        NGX_CONF_PATH=$NGX_PREFIX/$NGX_CONF_PATH
-    ;;
-esac
-
-
+NGX_CONF_PATH=${NGX_CONF_PATH:-conf/nginx.conf}
 NGX_CONF_PREFIX=`dirname $NGX_CONF_PATH`
+NGX_PID_PATH=${NGX_PID_PATH:-logs/nginx.pid}
+NGX_LOCK_PATH=${NGX_LOCK_PATH:-logs/nginx.lock}
 
+if [ ".$NGX_ERROR_LOG_PATH" = ".stderr" ]; then
+    NGX_ERROR_LOG_PATH=
+else
+    NGX_ERROR_LOG_PATH=${NGX_ERROR_LOG_PATH:-logs/error.log}
+fi
 
-case ".$NGX_PID_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_PID_PATH=$NGX_PREFIX/logs/nginx.pid
-    ;;
-
-    *)
-        NGX_PID_PATH=$NGX_PREFIX/$NGX_PID_PATH
-    ;;
-esac
-
-
-case ".$NGX_LOCK_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_LOCK_PATH=$NGX_PREFIX/logs/nginx.lock
-    ;;
-
-    *)
-        NGX_LOCK_PATH=$NGX_PREFIX/$NGX_LOCK_PATH
-    ;;
-esac
-
-
-case ".$NGX_ERROR_LOG_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_ERROR_LOG_PATH=$NGX_PREFIX/logs/error.log
-    ;;
-
-    .stderr)
-        NGX_ERROR_LOG_PATH=
-    ;;
-
-    *)
-        NGX_ERROR_LOG_PATH=$NGX_PREFIX/$NGX_ERROR_LOG_PATH
-    ;;
-esac
-
-
-case ".$NGX_HTTP_LOG_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_HTTP_LOG_PATH=$NGX_PREFIX/logs/access.log
-    ;;
-
-    *)
-        NGX_HTTP_LOG_PATH=$NGX_PREFIX/$NGX_HTTP_LOG_PATH
-    ;;
-esac
-
-
-case ".$NGX_HTTP_CLIENT_TEMP_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_HTTP_CLIENT_TEMP_PATH=$NGX_PREFIX/client_body_temp
-    ;;
-
-    *)
-        NGX_HTTP_CLIENT_TEMP_PATH=$NGX_PREFIX/$NGX_HTTP_CLIENT_TEMP_PATH
-    ;;
-esac
-
-
-case ".$NGX_HTTP_PROXY_TEMP_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_HTTP_PROXY_TEMP_PATH=$NGX_PREFIX/proxy_temp
-    ;;
-
-    *)
-        NGX_HTTP_PROXY_TEMP_PATH=$NGX_PREFIX/$NGX_HTTP_PROXY_TEMP_PATH
-    ;;
-esac
-
-
-case ".$NGX_HTTP_FASTCGI_TEMP_PATH" in
-    ./*)
-    ;;
-
-    .)
-        NGX_HTTP_FASTCGI_TEMP_PATH=$NGX_PREFIX/fastcgi_temp
-    ;;
-
-    *)
-        NGX_HTTP_FASTCGI_TEMP_PATH=$NGX_PREFIX/$NGX_HTTP_FASTCGI_TEMP_PATH
-    ;;
-esac
-
+NGX_HTTP_LOG_PATH=${NGX_HTTP_LOG_PATH:-logs/access.log}
+NGX_HTTP_CLIENT_TEMP_PATH=${NGX_HTTP_CLIENT_TEMP_PATH:-client_body_temp}
+NGX_HTTP_PROXY_TEMP_PATH=${NGX_HTTP_PROXY_TEMP_PATH:-proxy_temp}
+NGX_HTTP_FASTCGI_TEMP_PATH=${NGX_HTTP_FASTCGI_TEMP_PATH:-fastcgi_temp}
 
 case ".$NGX_PERL_MODULES" in
     ./*)

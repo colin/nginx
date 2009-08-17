@@ -48,7 +48,7 @@ ngx_http_perl_sv2str(pTHX_ ngx_http_request_t *r, ngx_str_t *s, SV *sv)
         return NGX_OK;
     }
 
-    s->data = ngx_palloc(r->pool, len);
+    s->data = ngx_pnalloc(r->pool, len);
     if (s->data == NULL) {
         return NGX_ERROR;
     }
@@ -242,16 +242,12 @@ header_in(r, key)
 
     /* look up hashed headers */
 
-    lowcase_key = ngx_palloc(r->pool, len);
+    lowcase_key = ngx_pnalloc(r->pool, len);
     if (lowcase_key == NULL) {
         XSRETURN_UNDEF;
     }
 
-    hash = 0;
-    for (i = 0; i < len; i++) {
-        lowcase_key[i] = ngx_tolower(p[i]);
-        hash = ngx_hash(hash, lowcase_key[i]);
-    }
+    hash = ngx_hash_strlow(lowcase_key, p, len);
 
     cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
 
@@ -293,7 +289,7 @@ header_in(r, key)
             size += ph[i]->value.len + sizeof("; ") - 1;
         }
 
-        cookie = ngx_palloc(r->pool, size);
+        cookie = ngx_pnalloc(r->pool, size);
         if (cookie == NULL) {
             XSRETURN_UNDEF;
         }
@@ -611,7 +607,7 @@ sendfile(r, filename, offset = -1, bytes = 0)
 
     ngx_http_request_t        *r;
     char                      *filename;
-    int                        offset;
+    off_t                      offset;
     size_t                     bytes;
     ngx_str_t                  path;
     ngx_buf_t                 *b;
@@ -639,22 +635,24 @@ sendfile(r, filename, offset = -1, bytes = 0)
         XSRETURN_EMPTY;
     }
 
-    clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-
-    of.test_dir = 0;
-    of.valid = clcf->open_file_cache_valid;
-    of.min_uses = clcf->open_file_cache_min_uses;
-    of.errors = clcf->open_file_cache_errors;
-    of.events = clcf->open_file_cache_events;
-
     path.len = ngx_strlen(filename);
 
-    path.data = ngx_pcalloc(r->pool, path.len + 1);
+    path.data = ngx_pnalloc(r->pool, path.len + 1);
     if (path.data == NULL) {
         XSRETURN_EMPTY;
     }
 
     (void) ngx_cpystrn(path.data, filename, path.len + 1);
+
+    clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+
+    ngx_memzero(&of, sizeof(ngx_open_file_info_t));
+
+    of.directio = clcf->directio;
+    of.valid = clcf->open_file_cache_valid;
+    of.min_uses = clcf->open_file_cache_min_uses;
+    of.errors = clcf->open_file_cache_errors;
+    of.events = clcf->open_file_cache_events;
 
     if (ngx_open_cached_file(clcf->open_file_cache, &path, &of, r->pool)
         != NGX_OK)
@@ -664,7 +662,7 @@ sendfile(r, filename, offset = -1, bytes = 0)
         }
 
         ngx_log_error(NGX_LOG_CRIT, r->connection->log, ngx_errno,
-                      ngx_open_file_n " \"%s\" failed", filename);
+                      "%s \"%s\" failed", of.failed, filename);
         XSRETURN_EMPTY;
     }
 
@@ -683,6 +681,7 @@ sendfile(r, filename, offset = -1, bytes = 0)
 
     b->file->fd = of.fd;
     b->file->log = r->connection->log;
+    b->file->directio = of.is_directio;
 
     (void) ngx_http_perl_output(r, b);
 
@@ -769,7 +768,7 @@ unescape(r, text, type = 0)
 
     src = (u_char *) SvPV(text, len);
 
-    p = ngx_palloc(r->pool, len + 1);
+    p = ngx_pnalloc(r->pool, len + 1);
     if (p == NULL) {
         XSRETURN_UNDEF;
     }
@@ -826,16 +825,12 @@ variable(r, name, value = NULL)
 
     p = (u_char *) SvPV(name, len);
 
-    lowcase = ngx_palloc(r->pool, len);
+    lowcase = ngx_pnalloc(r->pool, len);
     if (lowcase == NULL) {
         XSRETURN_UNDEF;
     }
 
-    hash = 0;
-    for (i = 0; i < len; i++) {
-        lowcase[i] = ngx_tolower(p[i]);
-        hash = ngx_hash(hash, lowcase[i]);
-    }
+    hash = ngx_hash_strlow(lowcase, p, len);
 
     var.len = len;
     var.data = lowcase;

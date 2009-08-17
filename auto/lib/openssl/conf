@@ -3,23 +3,35 @@
 
 
 if [ $OPENSSL != NONE ]; then
-    CORE_INCS="$CORE_INCS $OPENSSL/include"
 
     case "$CC" in
+
+        cl | bcc32)
+            have=NGX_OPENSSL . auto/have
+            have=NGX_SSL . auto/have
+
+            CFLAGS="$CFLAGS -DNO_SYS_TYPES_H"
+
+            CORE_INCS="$CORE_INCS $OPENSSL/openssl/include"
+            CORE_DEPS="$CORE_DEPS $OPENSSL/openssl/include/openssl/ssl.h"
+            CORE_LIBS="$CORE_LIBS $OPENSSL/openssl/lib/ssleay32.lib"
+            CORE_LIBS="$CORE_LIBS $OPENSSL/openssl/lib/libeay32.lib"
+
+            # libeay32.lib requires gdi32.lib
+            CORE_LIBS="$CORE_LIBS gdi32.lib"
+        ;;
+
         *)
             have=NGX_OPENSSL . auto/have
             have=NGX_SSL . auto/have
-            LINK_DEPS="$LINK_DEPS $OPENSSL/libssl.a $OPENSSL/libcrypto.a"
-            CORE_LIBS="$CORE_LIBS $OPENSSL/libssl.a $OPENSSL/libcrypto.a"
+
+            CORE_INCS="$CORE_INCS $OPENSSL/openssl/include"
+            CORE_DEPS="$CORE_DEPS $OPENSSL/openssl/include/openssl/ssl.h"
+            CORE_LIBS="$CORE_LIBS $OPENSSL/openssl/lib/libssl.a"
+            CORE_LIBS="$CORE_LIBS $OPENSSL/openssl/lib/libcrypto.a"
+            CORE_LIBS="$CORE_LIBS $NGX_LIBDL"
         ;;
     esac
-
-    case "$NGX_SYSTEM" in
-        SunOS|Linux)
-            CORE_LIBS="$CORE_LIBS -ldl"
-        ;;
-    esac
-
 
 else
 
@@ -36,8 +48,6 @@ else
 
             # libeay32.lib requires gdi32.lib
             CORE_LIBS="$CORE_LIBS gdi32.lib"
-            # OpenSSL 0.8's libeay32.lib requires advapi32.lib
-            CORE_LIBS="$CORE_LIBS advapi32.lib"
         ;;
 
         *)
@@ -54,14 +64,19 @@ else
 
             if [ $ngx_found = yes ]; then
                 have=NGX_SSL . auto/have
-                CORE_LIBS="$CORE_LIBS $ngx_feature_libs"
+                CORE_LIBS="$CORE_LIBS $ngx_feature_libs $NGX_LIBDL"
                 OPENSSL=YES
+            else
 
-                case "$NGX_SYSTEM" in
-                    SunOS)
-                        CORE_LIBS="$CORE_LIBS -ldl"
-                    ;;
-                esac
+cat << END
+
+$0: error: SSL modules require the OpenSSL library.
+You can either do not enable the modules, or install the OpenSSL library
+into the system, or build the OpenSSL library statically from the source
+with nginx by using --with-openssl=<path> option.
+
+END
+                exit 1
             fi
         ;;
 

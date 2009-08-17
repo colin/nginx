@@ -10,15 +10,14 @@
 
 
 typedef struct {
-    ngx_str_t      match;
-    ngx_str_t      sub;
+    ngx_str_t                  match;
+    ngx_http_complex_value_t   value;
 
-    ngx_array_t   *types;     /* array of ngx_str_t */
+    ngx_hash_t                 types;
 
-    ngx_array_t   *sub_lengths;
-    ngx_array_t   *sub_values;
+    ngx_flag_t                 once;
 
-    ngx_flag_t     once;
+    ngx_array_t               *types_keys;
 } ngx_http_sub_loc_conf_t;
 
 
@@ -29,27 +28,27 @@ typedef enum {
 
 
 typedef struct {
-    ngx_str_t      match;
+    ngx_str_t                  match;
 
-    ngx_uint_t     once;   /* unsigned  once:1 */
+    ngx_uint_t                 once;   /* unsigned  once:1 */
 
-    ngx_buf_t     *buf;
+    ngx_buf_t                 *buf;
 
-    u_char        *pos;
-    u_char        *copy_start;
-    u_char        *copy_end;
+    u_char                    *pos;
+    u_char                    *copy_start;
+    u_char                    *copy_end;
 
-    ngx_chain_t   *in;
-    ngx_chain_t   *out;
-    ngx_chain_t  **last_out;
-    ngx_chain_t   *busy;
-    ngx_chain_t   *free;
+    ngx_chain_t               *in;
+    ngx_chain_t               *out;
+    ngx_chain_t              **last_out;
+    ngx_chain_t               *busy;
+    ngx_chain_t               *free;
 
-    ngx_str_t      sub;
+    ngx_str_t                  sub;
 
-    ngx_uint_t     state;
-    size_t         saved;
-    size_t         looked;
+    ngx_uint_t                 state;
+    size_t                     saved;
+    size_t                     looked;
 } ngx_http_sub_ctx_t;
 
 
@@ -60,7 +59,6 @@ static ngx_int_t ngx_http_sub_parse(ngx_http_request_t *r,
 
 static char * ngx_http_sub_filter(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
-static char *ngx_http_sub_types(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_sub_create_conf(ngx_conf_t *cf);
 static char *ngx_http_sub_merge_conf(ngx_conf_t *cf,
     void *parent, void *child);
@@ -78,10 +76,10 @@ static ngx_command_t  ngx_http_sub_filter_commands[] = {
 
     { ngx_string("sub_filter_types"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
-      ngx_http_sub_types,
+      ngx_http_types_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
-      0,
-      NULL },
+      offsetof(ngx_http_sub_loc_conf_t, types_keys),
+      &ngx_http_html_default_types[0] },
 
     { ngx_string("sub_filter_once"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
@@ -132,33 +130,17 @@ static ngx_http_output_body_filter_pt    ngx_http_next_body_filter;
 static ngx_int_t
 ngx_http_sub_header_filter(ngx_http_request_t *r)
 {
-    ngx_str_t                *type;
-    ngx_uint_t                i;
     ngx_http_sub_ctx_t        *ctx;
     ngx_http_sub_loc_conf_t  *slcf;
 
     slcf = ngx_http_get_module_loc_conf(r, ngx_http_sub_filter_module);
 
     if (slcf->match.len == 0
-        || r->headers_out.content_type.len == 0
-        || r->headers_out.content_length_n == 0)
+        || r->headers_out.content_length_n == 0
+        || ngx_http_test_content_type(r, &slcf->types) == NULL)
     {
         return ngx_http_next_header_filter(r);
     }
-
-    type = slcf->types->elts;
-    for (i = 0; i < slcf->types->nelts; i++) {
-        if (r->headers_out.content_type.len >= type[i].len
-            && ngx_strncasecmp(r->headers_out.content_type.data,
-                               type[i].data, type[i].len) == 0)
-        {
-            goto found;
-        }
-    }
-
-    return ngx_http_next_header_filter(r);
-
-found:
 
     ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_sub_ctx_t));
     if (ctx == NULL) {
@@ -169,7 +151,6 @@ found:
 
     ctx->match = slcf->match;
     ctx->last_out = &ctx->out;
-    ctx->sub = slcf->sub;
 
     r->filter_need_in_memory = 1;
 
@@ -219,7 +200,7 @@ ngx_http_sub_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
     /* add the incoming chain to the chain ctx->in */
 
     if (in) {
-        if (ngx_chain_add_copy(r->pool, &ctx->in, in) == NGX_ERROR) {
+        if (ngx_chain_add_copy(r->pool, &ctx->in, in) != NGX_OK) {
             return NGX_ERROR;
         }
     }
@@ -361,9 +342,8 @@ ngx_http_sub_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
             if (ctx->sub.data == NULL) {
 
-                if (ngx_http_script_run(r, &ctx->sub, slcf->sub_lengths->elts,
-                                        0, slcf->sub_values->elts)
-                    == NULL)
+                if (ngx_http_complex_value(r, &slcf->value, &ctx->sub)
+                    != NGX_OK)
                 {
                     return NGX_ERROR;
                 }
@@ -479,12 +459,6 @@ ngx_http_sub_output(ngx_http_request_t *r, ngx_http_sub_ctx_t *ctx)
         if (ngx_buf_size(b) != 0) {
             break;
         }
-
-#if (NGX_HAVE_WRITE_ZEROCOPY)
-        if (b->zerocopy_busy) {
-            break;
-        }
-#endif
 
         if (b->shadow) {
             b->shadow->pos = b->shadow->last;
@@ -630,10 +604,8 @@ ngx_http_sub_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_http_sub_loc_conf_t *slcf = conf;
 
-    ngx_str_t                  *value;
-    ngx_int_t                   n;
-    ngx_uint_t                  i;
-    ngx_http_script_compile_t   sc;
+    ngx_str_t                         *value;
+    ngx_http_compile_complex_value_t   ccv;
 
     if (slcf->match.len) {
         return "is duplicate";
@@ -641,81 +613,18 @@ ngx_http_sub_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     value = cf->args->elts;
 
+    ngx_strlow(value[1].data, value[1].data, value[1].len);
+
     slcf->match = value[1];
 
-    for (i = 0; i < value[1].len; i++) {
-        value[1].data[i] = ngx_tolower(value[1].data[i]);
-    }
+    ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
 
-    n = ngx_http_script_variables_count(&value[2]);
+    ccv.cf = cf;
+    ccv.value = &value[2];
+    ccv.complex_value = &slcf->value;
 
-    if (n == 0) {
-        slcf->sub = value[2];
-        return NGX_CONF_OK;
-    }
-
-    ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
-
-    sc.cf = cf;
-    sc.source = &value[2];
-    sc.lengths = &slcf->sub_lengths;
-    sc.values = &slcf->sub_values;
-    sc.variables = n;
-    sc.complete_lengths = 1;
-    sc.complete_values = 1;
-
-    if (ngx_http_script_compile(&sc) != NGX_OK) {
+    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
         return NGX_CONF_ERROR;
-    }
-
-    return NGX_CONF_OK;
-}
-
-
-static char *
-ngx_http_sub_types(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
-{
-    ngx_http_sub_loc_conf_t *slcf = conf;
-
-    ngx_str_t   *value, *type;
-    ngx_uint_t   i;
-
-    if (slcf->types == NULL) {
-        slcf->types = ngx_array_create(cf->pool, 4, sizeof(ngx_str_t));
-        if (slcf->types == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        type = ngx_array_push(slcf->types);
-        if (type == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        type->len = sizeof("text/html") - 1;
-        type->data = (u_char *) "text/html";
-    }
-
-    value = cf->args->elts;
-
-    for (i = 1; i < cf->args->nelts; i++) {
-
-        if (ngx_strcmp(value[i].data, "text/html") == 0) {
-            continue;
-        }
-
-        type = ngx_array_push(slcf->types);
-        if (type == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        type->len = value[i].len;
-
-        type->data = ngx_palloc(cf->pool, type->len + 1);
-        if (type->data == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        ngx_cpystrn(type->data, value[i].data, type->len + 1);
     }
 
     return NGX_CONF_OK;
@@ -735,13 +644,12 @@ ngx_http_sub_create_conf(ngx_conf_t *cf)
     /*
      * set by ngx_pcalloc():
      *
-     *     conf->match.len = 0;
-     *     conf->match.data = NULL;
-     *     conf->sub.len = 0;
-     *     conf->sub.data = NULL;
+     *     conf->match = { 0, NULL };
+     *     conf->sub = { 0, NULL };
      *     conf->sub_lengths = NULL;
      *     conf->sub_values = NULL;
-     *     conf->types = NULL;
+     *     conf->types = { NULL };
+     *     conf->types_keys = NULL;
      */
 
     slcf->once = NGX_CONF_UNSET;
@@ -756,35 +664,19 @@ ngx_http_sub_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_sub_loc_conf_t *prev = parent;
     ngx_http_sub_loc_conf_t *conf = child;
 
-    ngx_str_t  *type;
-
     ngx_conf_merge_value(conf->once, prev->once, 1);
     ngx_conf_merge_str_value(conf->match, prev->match, "");
 
-    if (conf->sub.data == NULL && conf->sub_lengths == NULL) {
-        conf->sub = prev->sub;
-        conf->sub_lengths = prev->sub_lengths;
-        conf->sub_values = prev->sub_values;
+    if (conf->value.value.len == 0) {
+        conf->value = prev->value;
     }
 
-    if (conf->types == NULL) {
-        if (prev->types == NULL) {
-            conf->types = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
-            if (conf->types == NULL) {
-                return NGX_CONF_ERROR;
-            }
-
-            type = ngx_array_push(conf->types);
-            if (type == NULL) {
-                return NGX_CONF_ERROR;
-            }
-
-            type->len = sizeof("text/html") - 1;
-            type->data = (u_char *) "text/html";
-
-        } else {
-            conf->types = prev->types;
-        }
+    if (ngx_http_merge_types(cf, conf->types_keys, &conf->types,
+                             prev->types_keys, &prev->types,
+                             ngx_http_html_default_types)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
     }
 
     return NGX_CONF_OK;

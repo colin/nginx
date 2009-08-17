@@ -13,7 +13,6 @@
 
 
 #define NGX_IO_SENDFILE    1
-#define NGX_IO_ZEROCOPY    2
 
 
 typedef ssize_t (*ngx_recv_pt)(ngx_connection_t *c, u_char *buf, size_t size);
@@ -38,6 +37,7 @@ void ngx_os_status(ngx_log_t *log);
 ngx_int_t ngx_os_specific_init(ngx_log_t *log);
 void ngx_os_specific_status(ngx_log_t *log);
 ngx_int_t ngx_daemon(ngx_log_t *log);
+ngx_int_t ngx_os_signal_process(ngx_cycle_t *cycle, char *sig, ngx_int_t pid);
 
 
 ssize_t ngx_unix_recv(ngx_connection_t *c, u_char *buf, size_t size);
@@ -54,7 +54,6 @@ extern ngx_int_t    ngx_max_sockets;
 extern ngx_uint_t   ngx_inherited_nonblocking;
 extern ngx_uint_t   ngx_tcp_nodelay_and_tcp_nopush;
 
-#define ngx_stderr_fileno  STDERR_FILENO
 
 #if (NGX_FREEBSD)
 #include <ngx_freebsd.h>
@@ -66,6 +65,10 @@ extern ngx_uint_t   ngx_tcp_nodelay_and_tcp_nopush;
 
 #elif (NGX_SOLARIS)
 #include <ngx_solaris.h>
+
+
+#elif (NGX_DARWIN)
+#include <ngx_darwin.h>
 #endif
 
 

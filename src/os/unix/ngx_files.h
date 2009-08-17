@@ -12,12 +12,39 @@
 #include <ngx_core.h>
 
 
+typedef int                      ngx_fd_t;
+typedef struct stat              ngx_file_info_t;
+typedef ino_t                    ngx_file_uniq_t;
+
+
+typedef struct {
+    DIR                        *dir;
+    struct dirent              *de;
+    struct stat                 info;
+
+    unsigned                    type:8;
+    unsigned                    valid_info:1;
+    unsigned                    valid_type:1;
+} ngx_dir_t;
+
+
+typedef struct {
+    size_t                       n;
+    glob_t                       pglob;
+    u_char                      *pattern;
+    ngx_log_t                   *log;
+    ngx_uint_t                   test;
+} ngx_glob_t;
+
+
 #define NGX_INVALID_FILE         -1
 #define NGX_FILE_ERROR           -1
 
 
 
 #ifdef __CYGWIN__
+
+#define NGX_HAVE_CASELESS_FILESYSTEM  1
 
 #define ngx_open_file(name, mode, create, access)                            \
     open((const char *) name, mode|create|O_BINARY, access)
@@ -36,10 +63,11 @@
 #define NGX_FILE_RDWR            O_RDWR
 #define NGX_FILE_CREATE_OR_OPEN  O_CREAT
 #define NGX_FILE_OPEN            0
-#define NGX_FILE_TRUNCATE        O_TRUNC
-#define NGX_FILE_APPEND          O_APPEND
+#define NGX_FILE_TRUNCATE        O_CREAT|O_TRUNC
+#define NGX_FILE_APPEND          O_WRONLY|O_APPEND
 
 #define NGX_FILE_DEFAULT_ACCESS  0644
+#define NGX_FILE_OWNER_ACCESS    0600
 
 
 #define ngx_close_file           close
@@ -56,7 +84,11 @@ ngx_fd_t ngx_open_tempfile(u_char *name, ngx_uint_t persistent,
 
 
 ssize_t ngx_read_file(ngx_file_t *file, u_char *buf, size_t size, off_t offset);
+#if (NGX_HAVE_PREAD)
+#define ngx_read_file_n          "pread()"
+#else
 #define ngx_read_file_n          "read()"
+#endif
 
 ssize_t ngx_write_file(ngx_file_t *file, u_char *buf, size_t size,
     off_t offset);
@@ -80,6 +112,10 @@ ngx_write_fd(ngx_fd_t fd, void *buf, size_t n)
 }
 
 #define ngx_write_fd_n           "write()"
+
+
+#define ngx_write_console        ngx_write_fd
+
 
 #define ngx_linefeed(p)          *p++ = LF;
 #define NGX_LINEFEED_SIZE        1
@@ -113,9 +149,23 @@ ngx_int_t ngx_set_file_time(u_char *name, ngx_fd_t fd, time_t s);
 #define ngx_file_uniq(sb)        (sb)->st_ino
 
 
+#if (NGX_HAVE_CASELESS_FILESYSTEM)
 
-#define ngx_getcwd(buf, size)    (getcwd(buf, size) != NULL)
+#define ngx_filename_cmp(s1, s2, n)  strncasecmp((char *) s1, (char *) s2, n)
+
+#else
+
+#define ngx_filename_cmp         ngx_memcmp
+
+#endif
+
+
+#define ngx_realpath(p, r)       realpath((char *) p, (char *) r)
+#define ngx_realpath_n           "realpath()"
+#define ngx_getcwd(buf, size)    (getcwd((char *) buf, size) != NULL)
 #define ngx_getcwd_n             "getcwd()"
+#define ngx_path_separator(c)    ((c) == '/')
+
 #define NGX_MAX_PATH             PATH_MAX
 
 #define NGX_DIR_MASK_LEN         0
@@ -129,8 +179,7 @@ ngx_int_t ngx_open_dir(ngx_str_t *name, ngx_dir_t *dir);
 #define ngx_close_dir_n          "closedir()"
 
 
-#define ngx_read_dir(d)                                                      \
-    (((d)->de = readdir((d)->dir)) ? NGX_OK : NGX_ERROR)
+ngx_int_t ngx_read_dir(ngx_dir_t *dir);
 #define ngx_read_dir_n           "readdir()"
 
 
@@ -146,7 +195,7 @@ ngx_int_t ngx_open_dir(ngx_str_t *name, ngx_dir_t *dir);
 
 
 #define ngx_de_name(dir)         ((u_char *) (dir)->de->d_name)
-#if (NGX_FREEBSD)
+#if (NGX_HAVE_D_NAMLEN)
 #define ngx_de_namelen(dir)      (dir)->de->d_namlen
 #else
 #define ngx_de_namelen(dir)      ngx_strlen((dir)->de->d_name)
@@ -155,21 +204,39 @@ ngx_int_t ngx_open_dir(ngx_str_t *name, ngx_dir_t *dir);
 #define ngx_de_info_n            "stat()"
 #define ngx_de_link_info(name, dir)  lstat((const char *) name, &(dir)->info)
 #define ngx_de_link_info_n       "lstat()"
+
+#if (NGX_HAVE_D_TYPE)
+
+#if (NGX_LINUX)
+
+/* XFS on Linux does not set dirent.d_type */
+
+#define ngx_de_is_dir(dir)                                                   \
+    (((dir)->type) ? ((dir)->type == DT_DIR) : (S_ISDIR((dir)->info.st_mode)))
+#define ngx_de_is_file(dir)                                                  \
+    (((dir)->type) ? ((dir)->type == DT_REG) : (S_ISREG((dir)->info.st_mode)))
+#define ngx_de_is_link(dir)                                                  \
+    (((dir)->type) ? ((dir)->type == DT_LINK) : (S_ISLNK((dir)->info.st_mode)))
+
+#else
+
+#define ngx_de_is_dir(dir)       ((dir)->type == DT_DIR)
+#define ngx_de_is_file(dir)      ((dir)->type == DT_REG)
+#define ngx_de_is_link(dir)      ((dir)->type == DT_LINK)
+
+#endif /* NGX_LINUX */
+
+#else
+
 #define ngx_de_is_dir(dir)       (S_ISDIR((dir)->info.st_mode))
 #define ngx_de_is_file(dir)      (S_ISREG((dir)->info.st_mode))
 #define ngx_de_is_link(dir)      (S_ISLNK((dir)->info.st_mode))
+
+#endif
+
 #define ngx_de_access(dir)       (((dir)->info.st_mode) & 0777)
 #define ngx_de_size(dir)         (dir)->info.st_size
 #define ngx_de_mtime(dir)        (dir)->info.st_mtime
-
-
-typedef struct {
-    size_t       n;
-    glob_t       pglob;
-    u_char      *pattern;
-    ngx_log_t   *log;
-    ngx_uint_t   test;
-} ngx_glob_t;
 
 
 ngx_int_t ngx_open_glob(ngx_glob_t *gl);
@@ -185,6 +252,39 @@ ngx_err_t ngx_unlock_fd(ngx_fd_t fd);
 #define ngx_trylock_fd_n         "fcntl(F_SETLK, F_WRLCK)"
 #define ngx_lock_fd_n            "fcntl(F_SETLKW, F_WRLCK)"
 #define ngx_unlock_fd_n          "fcntl(F_SETLK, F_UNLCK)"
+
+
+#if (NGX_HAVE_O_DIRECT)
+
+ngx_int_t ngx_directio_on(ngx_fd_t fd);
+#define ngx_directio_on_n        "fcntl(O_DIRECT)"
+
+ngx_int_t ngx_directio_off(ngx_fd_t fd);
+#define ngx_directio_off_n       "fcntl(!O_DIRECT)"
+
+#elif (NGX_HAVE_F_NOCACHE)
+
+#define ngx_directio_on(fd)      fcntl(fd, F_NOCACHE, 1)
+#define ngx_directio_on_n        "fcntl(F_NOCACHE, 1)"
+
+#elif (NGX_HAVE_DIRECTIO)
+
+#define ngx_directio_on(fd)      directio(fd, DIRECTIO_ON)
+#define ngx_directio_on_n        "directio(DIRECTIO_ON)"
+
+#else
+
+#define ngx_directio_on(fd)      0
+#define ngx_directio_on_n        "ngx_directio_on_n"
+
+#endif
+
+size_t ngx_fs_bsize(u_char *name);
+
+
+#define ngx_stderr               STDERR_FILENO
+#define ngx_set_stderr(fd)       dup2(fd, STDERR_FILENO)
+#define ngx_set_stderr_n         "dup2(STDERR_FILENO)"
 
 
 #endif /* _NGX_FILES_H_INCLUDED_ */

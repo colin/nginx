@@ -7,10 +7,12 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
+#define NGX_CONF_BUFFER  4096
 
 static ngx_int_t ngx_conf_handler(ngx_conf_t *cf, ngx_int_t last);
 static ngx_int_t ngx_conf_read_token(ngx_conf_t *cf);
 static char *ngx_conf_include(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static ngx_int_t ngx_conf_test_full_name(ngx_str_t *name);
 static void ngx_conf_flush_files(ngx_cycle_t *cycle);
 
 
@@ -43,9 +45,9 @@ ngx_module_t  ngx_conf_module = {
 };
 
 
-/* The ten fixed arguments */
+/* The eight fixed arguments */
 
-static int argument_number[] = {
+static ngx_uint_t argument_number[] = {
     NGX_CONF_NOARGS,
     NGX_CONF_TAKE1,
     NGX_CONF_TAKE2,
@@ -58,14 +60,57 @@ static int argument_number[] = {
 
 
 char *
+ngx_conf_param(ngx_conf_t *cf)
+{
+    char             *rv;
+    ngx_str_t        *param;
+    ngx_buf_t         b;
+    ngx_conf_file_t   conf_file;
+
+    param = &cf->cycle->conf_param;
+
+    if (param->len == 0) {
+        return NGX_CONF_OK;
+    }
+
+    ngx_memzero(&conf_file, sizeof(ngx_conf_file_t));
+
+    ngx_memzero(&b, sizeof(ngx_buf_t));
+
+    b.start = param->data;
+    b.pos = param->data;
+    b.last = param->data + param->len;
+    b.end = b.last;
+    b.temporary = 1;
+
+    conf_file.file.fd = NGX_INVALID_FILE;
+    conf_file.file.name.data = NULL;
+    conf_file.line = 0;
+
+    cf->conf_file = &conf_file;
+    cf->conf_file->buffer = &b;
+
+    rv = ngx_conf_parse(cf, NULL);
+
+    cf->conf_file = NULL;
+
+    return rv;
+}
+
+
+char *
 ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
 {
     char             *rv;
     ngx_fd_t          fd;
     ngx_int_t         rc;
-    ngx_buf_t        *b;
-    ngx_uint_t        block;
-    ngx_conf_file_t  *prev;
+    ngx_buf_t         buf;
+    ngx_conf_file_t  *prev, conf_file;
+    enum {
+        parse_file = 0,
+        parse_block,
+        parse_param
+    } type;
 
 #if (NGX_SUPPRESS_WARN)
     fd = NGX_INVALID_FILE;
@@ -86,32 +131,24 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
 
         prev = cf->conf_file;
 
-        cf->conf_file = ngx_palloc(cf->pool, sizeof(ngx_conf_file_t));
-        if (cf->conf_file == NULL) {
-            return NGX_CONF_ERROR;
-        }
+        cf->conf_file = &conf_file;
 
         if (ngx_fd_info(fd, &cf->conf_file->file.info) == -1) {
             ngx_log_error(NGX_LOG_EMERG, cf->log, ngx_errno,
                           ngx_fd_info_n " \"%s\" failed", filename->data);
         }
 
-        b = ngx_calloc_buf(cf->pool);
-        if (b == NULL) {
-            return NGX_CONF_ERROR;
+        cf->conf_file->buffer = &buf;
+
+        buf.start = ngx_alloc(NGX_CONF_BUFFER, cf->log);
+        if (buf.start == NULL) {
+            goto failed;
         }
 
-        cf->conf_file->buffer = b;
-
-        b->start = ngx_alloc(ngx_pagesize, cf->log);
-        if (b->start == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        b->pos = b->start;
-        b->last = b->start;
-        b->end = b->last + ngx_pagesize;
-        b->temporary = 1;
+        buf.pos = buf.start;
+        buf.last = buf.start;
+        buf.end = buf.last + NGX_CONF_BUFFER;
+        buf.temporary = 1;
 
         cf->conf_file->file.fd = fd;
         cf->conf_file->file.name.len = filename->len;
@@ -120,10 +157,14 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
         cf->conf_file->file.log = cf->log;
         cf->conf_file->line = 1;
 
-        block = 0;
+        type = parse_file;
+
+    } else if (cf->conf_file->file.fd != NGX_INVALID_FILE) {
+
+        type = parse_block;
 
     } else {
-        block = 1;
+        type = parse_param;
     }
 
 
@@ -145,23 +186,37 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
         }
 
         if (rc == NGX_CONF_BLOCK_DONE) {
-            if (!block) {
+
+            if (type != parse_block) {
                 ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "unexpected \"}\"");
                 goto failed;
             }
 
-            block = 0;
-        }
-
-        if (rc == NGX_CONF_FILE_DONE && block) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                               "unexpected end of file, expecting \"}\"");
-            goto failed;
-        }
-
-        if (rc != NGX_OK && rc != NGX_CONF_BLOCK_START) {
             goto done;
         }
+
+        if (rc == NGX_CONF_FILE_DONE) {
+
+            if (type == parse_block) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "unexpected end of file, expecting \"}\"");
+                goto failed;
+            }
+
+            goto done;
+        }
+
+        if (rc == NGX_CONF_BLOCK_START) {
+
+            if (type == parse_param) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "block directives are not supported "
+                                   "in -g option");
+                goto failed;
+            }
+        }
+
+        /* rc == NGX_OK || rc == NGX_CONF_BLOCK_START */
 
         if (cf->handler) {
 
@@ -199,7 +254,9 @@ failed:
 done:
 
     if (filename) {
-        ngx_free(cf->conf_file->buffer->start);
+        if (cf->conf_file->buffer->start) {
+            ngx_free(cf->conf_file->buffer->start);
+        }
 
         if (ngx_close_file(fd) == NGX_FILE_ERROR) {
             ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,
@@ -377,10 +434,11 @@ static ngx_int_t
 ngx_conf_read_token(ngx_conf_t *cf)
 {
     u_char      *start, ch, *src, *dst;
-    int          len;
-    int          found, need_space, last_space, sharp_comment, variable;
-    int          quoted, s_quoted, d_quoted;
-    ssize_t      n;
+    off_t        file_size;
+    size_t       len;
+    ssize_t      n, size;
+    ngx_uint_t   found, need_space, last_space, sharp_comment, variable;
+    ngx_uint_t   quoted, s_quoted, d_quoted, start_line;
     ngx_str_t   *word;
     ngx_buf_t   *b;
 
@@ -389,19 +447,32 @@ ngx_conf_read_token(ngx_conf_t *cf)
     last_space = 1;
     sharp_comment = 0;
     variable = 0;
-    quoted = s_quoted = d_quoted = 0;
+    quoted = 0;
+    s_quoted = 0;
+    d_quoted = 0;
 
     cf->args->nelts = 0;
     b = cf->conf_file->buffer;
     start = b->pos;
+    start_line = cf->conf_file->line;
+
+    file_size = ngx_file_size(&cf->conf_file->file.info);
 
     for ( ;; ) {
 
         if (b->pos >= b->last) {
-            if (cf->conf_file->file.offset
-                                 >= ngx_file_size(&cf->conf_file->file.info))
-            {
+
+            if (cf->conf_file->file.offset >= file_size) {
+
                 if (cf->args->nelts > 0) {
+
+                    if (cf->conf_file->file.fd == NGX_INVALID_FILE) {
+                        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                           "unexpected end of parameter, "
+                                           "expecting \";\"");
+                        return NGX_ERROR;
+                    }
+
                     ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                                   "unexpected end of file, "
                                   "expecting \";\" or \"}\"");
@@ -411,22 +482,58 @@ ngx_conf_read_token(ngx_conf_t *cf)
                 return NGX_CONF_FILE_DONE;
             }
 
-            if (b->pos - start) {
-                ngx_memcpy(b->start, start, b->pos - start);
+            len = b->pos - start;
+
+            if (len == NGX_CONF_BUFFER) {
+                cf->conf_file->line = start_line;
+
+                if (d_quoted) {
+                    ch = '"';
+
+                } else if (s_quoted) {
+                    ch = '\'';
+
+                } else {
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                       "too long parameter \"%*s...\" started",
+                                       10, start);
+                    return NGX_ERROR;
+                }
+
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "too long parameter, probably "
+                                   "missing terminating \"%c\" character", ch);
+                return NGX_ERROR;
             }
 
-            n = ngx_read_file(&cf->conf_file->file,
-                              b->start + (b->pos - start),
-                              b->end - (b->start + (b->pos - start)),
+            if (len) {
+                ngx_memcpy(b->start, start, len);
+            }
+
+            size = (ssize_t) (file_size - cf->conf_file->file.offset);
+
+            if (size > b->end - (b->start + len)) {
+                size = b->end - (b->start + len);
+            }
+
+            n = ngx_read_file(&cf->conf_file->file, b->start + len, size,
                               cf->conf_file->file.offset);
 
             if (n == NGX_ERROR) {
                 return NGX_ERROR;
             }
 
-            b->pos = b->start + (b->pos - start);
-            start = b->start;
+            if (n != size) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   ngx_read_file_n " returned "
+                                   "only %z bytes instead of %z",
+                                   n, size);
+                return NGX_ERROR;
+            }
+
+            b->pos = b->start + len;
             b->last = b->pos + n;
+            start = b->start;
         }
 
         ch = *b->pos++;
@@ -480,6 +587,7 @@ ngx_conf_read_token(ngx_conf_t *cf)
             }
 
             start = b->pos - 1;
+            start_line = cf->conf_file->line;
 
             switch (ch) {
 
@@ -574,7 +682,7 @@ ngx_conf_read_token(ngx_conf_t *cf)
                     return NGX_ERROR;
                 }
 
-                word->data = ngx_palloc(cf->pool, b->pos - start + 1);
+                word->data = ngx_pnalloc(cf->pool, b->pos - start + 1);
                 if (word->data == NULL) {
                     return NGX_ERROR;
                 }
@@ -641,7 +749,7 @@ ngx_conf_include(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     ngx_log_debug1(NGX_LOG_DEBUG_CORE, cf->log, 0, "include %s", file.data);
 
-    if (ngx_conf_full_name(cf->cycle, &file, 1) == NGX_ERROR) {
+    if (ngx_conf_full_name(cf->cycle, &file, 1) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
 
@@ -695,46 +803,94 @@ ngx_int_t
 ngx_conf_full_name(ngx_cycle_t *cycle, ngx_str_t *name, ngx_uint_t conf_prefix)
 {
     size_t      len;
-    u_char     *p, *prefix;
-    ngx_str_t   old;
+    u_char     *p, *n, *prefix;
+    ngx_int_t   rc;
+
+    rc = ngx_conf_test_full_name(name);
+
+    if (rc == NGX_OK) {
+        return rc;
+    }
+
+    if (conf_prefix) {
+        len = cycle->conf_prefix.len;
+        prefix = cycle->conf_prefix.data;
+
+    } else {
+        len = cycle->prefix.len;
+        prefix = cycle->prefix.data;
+    }
+
+#if (NGX_WIN32)
+
+    if (rc == 2) {
+        len = rc;
+    }
+
+#endif
+
+    n = ngx_pnalloc(cycle->pool, len + name->len + 1);
+    if (n == NULL) {
+        return NGX_ERROR;
+    }
+
+    p = ngx_cpymem(n, prefix, len);
+    ngx_cpystrn(p, name->data, name->len + 1);
+
+    name->len += len;
+    name->data = n;
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_conf_test_full_name(ngx_str_t *name)
+{
+#if (NGX_WIN32)
+    u_char  c0, c1;
+
+    c0 = name->data[0];
+
+    if (name->len < 2) {
+        if (c0 == '/') {
+            return 2;
+        }
+
+        return NGX_DECLINED;
+    }
+
+    c1 = name->data[1];
+
+    if (c1 == ':') {
+        c0 |= 0x20;
+
+        if ((c0 >= 'a' && c0 <= 'z')) {
+            return NGX_OK;
+        }
+
+        return NGX_DECLINED;
+    }
+
+    if (c1 == '/') {
+        return NGX_OK;
+    }
+
+    if (c0 == '/') {
+        return 2;
+    }
+
+    return NGX_DECLINED;
+
+#else
 
     if (name->data[0] == '/') {
         return NGX_OK;
     }
 
-#if (NGX_WIN32)
-
-    if (name->len > 2
-        && name->data[1] == ':'
-        && ((name->data[0] >= 'a' && name->data[0] <= 'z')
-             || (name->data[0] >= 'A' && name->data[0] <= 'Z')))
-    {
-        return NGX_OK;
-    }
+    return NGX_DECLINED;
 
 #endif
-
-    old = *name;
-
-    if (conf_prefix) {
-        len = sizeof(NGX_CONF_PREFIX) - 1;
-        prefix = (u_char *) NGX_CONF_PREFIX;
-
-    } else {
-        len = cycle->root.len;
-        prefix = cycle->root.data;
-    }
-
-    name->len = len + old.len;
-    name->data = ngx_palloc(cycle->pool, name->len + 1);
-    if (name->data == NULL) {
-        return  NGX_ERROR;
-    }
-
-    p = ngx_cpymem(name->data, prefix, len);
-    ngx_cpystrn(p, old.data, old.len + 1);
-
-    return NGX_OK;
 }
 
 
@@ -751,10 +907,10 @@ ngx_conf_open_file(ngx_cycle_t *cycle, ngx_str_t *name)
     full.data = NULL;
 #endif
 
-    if (name) {
+    if (name->len) {
         full = *name;
 
-        if (ngx_conf_full_name(cycle, &full, 0) == NGX_ERROR) {
+        if (ngx_conf_full_name(cycle, &full, 0) != NGX_OK) {
             return NULL;
         }
 
@@ -787,14 +943,13 @@ ngx_conf_open_file(ngx_cycle_t *cycle, ngx_str_t *name)
         return NULL;
     }
 
-    if (name) {
+    if (name->len) {
         file->fd = NGX_INVALID_FILE;
         file->name = full;
 
     } else {
-        file->fd = ngx_stderr_fileno;
-        file->name.len = 0;
-        file->name.data = NULL;
+        file->fd = ngx_stderr;
+        file->name = *name;
     }
 
     file->buffer = NULL;
@@ -859,35 +1014,21 @@ ngx_conf_log_error(ngx_uint_t level, ngx_conf_t *cf, ngx_err_t err,
     last = errstr + NGX_MAX_CONF_ERRSTR;
 
     va_start(args, fmt);
-    p = ngx_vsnprintf(errstr, last - errstr, fmt, args);
+    p = ngx_vslprintf(errstr, last, fmt, args);
     va_end(args);
 
     if (err) {
-
-        if (p > last - 50) {
-
-            /* leave a space for an error code */
-
-            p = last - 50;
-            *p++ = '.';
-            *p++ = '.';
-            *p++ = '.';
-        }
-
-#if (NGX_WIN32)
-        p = ngx_snprintf(p, last - p, ((unsigned) err < 0x80000000)
-                                           ? " (%d: " : " (%Xd: ", err);
-#else
-        p = ngx_snprintf(p, last - p, " (%d: ", err);
-#endif
-
-        p = ngx_strerror_r(err, p, last - p);
-
-        *p++ = ')';
+        p = ngx_log_errno(p, last, err);
     }
 
     if (cf->conf_file == NULL) {
         ngx_log_error(level, cf->log, 0, "%*s", p - errstr, errstr);
+        return;
+    }
+
+    if (cf->conf_file->file.fd == NGX_INVALID_FILE) {
+        ngx_log_error(level, cf->log, 0, "%*s in command line",
+                      p - errstr, errstr);
         return;
     }
 

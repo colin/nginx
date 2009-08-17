@@ -36,7 +36,8 @@ static ngx_str_t  ngx_mail_imap_auth_methods_names[] = {
     ngx_string("AUTH=PLAIN"),
     ngx_string("AUTH=LOGIN"),
     ngx_null_string,  /* APOP */
-    ngx_string("AUTH=CRAM-MD5")
+    ngx_string("AUTH=CRAM-MD5"),
+    ngx_null_string   /* NONE */
 };
 
 
@@ -183,7 +184,7 @@ ngx_mail_imap_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
         }
     }
 
-    p = ngx_palloc(cf->pool, size);
+    p = ngx_pnalloc(cf->pool, size);
     if (p == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -216,7 +217,7 @@ ngx_mail_imap_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
     size += sizeof(" STARTTLS") - 1;
 
-    p = ngx_palloc(cf->pool, size);
+    p = ngx_pnalloc(cf->pool, size);
     if (p == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -233,7 +234,7 @@ ngx_mail_imap_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     size = (auth - conf->capability.data) + sizeof(CRLF) - 1
             + sizeof(" STARTTLS LOGINDISABLED") - 1;
 
-    p = ngx_palloc(cf->pool, size);
+    p = ngx_pnalloc(cf->pool, size);
     if (p == NULL) {
         return NGX_CONF_ERROR;
     }
