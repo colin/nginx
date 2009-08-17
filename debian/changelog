@@ -1,3 +1,10 @@
+nginx (0.6.38-0sofa2) unstable; urgency=low
+
+  * Added upload module
+  * Added upload progress module
+
+ -- Colin Schlueter <mail@colinschlueter.com>  Mon, 17 Aug 2009 18:00:00 +0200
+
 nginx (0.6.38-0sofa1) unstable; urgency=low
 
   * Disabled debug mode, removed unused modules

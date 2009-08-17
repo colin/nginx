@@ -32,7 +32,9 @@ endif
 	--http-fastcgi-temp-path=/var/lib/nginx/fastcgi \
 	--with-http_ssl_module \
 	--with-http_stub_status_module \
-	--add-module=$(CURDIR)/debian/passenger/ext/nginx
+	--add-module=$(CURDIR)/debian/passenger/ext/nginx \
+	--add-module=$(CURDIR)/debian/upload \
+	--add-module=$(CURDIR)/debian/upload-progress
 
 build: config.status
 	$(MAKE) build
