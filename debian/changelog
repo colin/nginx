@@ -1,3 +1,10 @@
+nginx (0.7.61-0sofa1) unstable; urgency=low
+
+  * Use official upload module release
+  * Use official upload progress module release
+
+ -- Colin Schlueter <mail@colinschlueter.com>  Mon, 17 Aug 2009 20:57:00 +0200
+
 nginx (0.7.61-0sofa) unstable; urgency=low
 
   * Imported upstream version 0.7.61
