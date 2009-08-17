@@ -28,6 +28,7 @@
 #include <grp.h>
 #include <dirent.h>
 #include <glob.h>
+#include <sys/vfs.h>            /* statfs() */
 
 #include <sys/uio.h>
 #include <sys/stat.h>
@@ -91,11 +92,6 @@ extern ssize_t sendfile(int s, int fd, int32_t *offset, size_t size);
 #ifndef NGX_HAVE_SO_SNDLOWAT
 /* setsockopt(SO_SNDLOWAT) returns ENOPROTOOPT */
 #define NGX_HAVE_SO_SNDLOWAT         0
-#endif
-
-
-#ifndef NGX_HAVE_GNU_CRYPT_R
-#define NGX_HAVE_GNU_CRYPT_R         1
 #endif
 
 

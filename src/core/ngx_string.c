@@ -8,6 +8,21 @@
 #include <ngx_core.h>
 
 
+static u_char *ngx_sprintf_num(u_char *buf, u_char *last, uint64_t ui64,
+    u_char zero, ngx_uint_t hexadecimal, ngx_uint_t width);
+
+
+void
+ngx_strlow(u_char *dst, u_char *src, size_t n)
+{
+    while (n--) {
+        *dst = ngx_tolower(*src);
+        dst++;
+        src++;
+    }
+}
+
+
 u_char *
 ngx_cpystrn(u_char *dst, u_char *src, size_t n)
 {
@@ -34,7 +49,7 @@ ngx_pstrdup(ngx_pool_t *pool, ngx_str_t *src)
 {
     u_char  *dst;
 
-    dst = ngx_palloc(pool, src->len);
+    dst = ngx_pnalloc(pool, src->len);
     if (dst == NULL) {
         return NULL;
     }
@@ -56,6 +71,7 @@ ngx_pstrdup(ngx_pool_t *pool, ngx_str_t *src)
  *    %[0][width][u][x|X]D      int32_t/uint32_t
  *    %[0][width][u][x|X]L      int64_t/uint64_t
  *    %[0][width|m][u][x|X]A    ngx_atomic_int_t/ngx_atomic_uint_t
+ *    %[0][width][.width]f      float
  *    %P                        ngx_pid_t
  *    %M                        ngx_msec_t
  *    %r                        rlim_t
@@ -83,7 +99,7 @@ ngx_sprintf(u_char *buf, const char *fmt, ...)
     va_list   args;
 
     va_start(args, fmt);
-    p = ngx_vsnprintf(buf, /* STUB */ 65536, fmt, args);
+    p = ngx_vslprintf(buf, (void *) -1, fmt, args);
     va_end(args);
 
     return p;
@@ -97,7 +113,21 @@ ngx_snprintf(u_char *buf, size_t max, const char *fmt, ...)
     va_list   args;
 
     va_start(args, fmt);
-    p = ngx_vsnprintf(buf, max, fmt, args);
+    p = ngx_vslprintf(buf, buf + max, fmt, args);
+    va_end(args);
+
+    return p;
+}
+
+
+u_char * ngx_cdecl
+ngx_slprintf(u_char *buf, u_char *last, const char *fmt, ...)
+{
+    u_char   *p;
+    va_list   args;
+
+    va_start(args, fmt);
+    p = ngx_vslprintf(buf, last, fmt, args);
     va_end(args);
 
     return p;
@@ -105,30 +135,18 @@ ngx_snprintf(u_char *buf, size_t max, const char *fmt, ...)
 
 
 u_char *
-ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
+ngx_vslprintf(u_char *buf, u_char *last, const char *fmt, va_list args)
 {
-    u_char                *p, zero, *last, temp[NGX_INT64_LEN + 1];
-                                    /*
-                                     * really we need temp[NGX_INT64_LEN] only,
-                                     * but icc issues the warning
-                                     */
+    u_char                *p, zero;
     int                    d;
+    float                  f, scale;
     size_t                 len, slen;
-    uint32_t               ui32;
     int64_t                i64;
     uint64_t               ui64;
     ngx_msec_t             ms;
-    ngx_uint_t             width, sign, hexadecimal, max_width;
+    ngx_uint_t             width, sign, hex, max_width, frac_width, i;
     ngx_str_t             *v;
     ngx_variable_value_t  *vv;
-    static u_char          hex[] = "0123456789abcdef";
-    static u_char          HEX[] = "0123456789ABCDEF";
-
-    if (max == 0) {
-        return buf;
-    }
-
-    last = buf + max;
 
     while (*fmt && buf < last) {
 
@@ -145,11 +163,10 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
             zero = (u_char) ((*++fmt == '0') ? '0' : ' ');
             width = 0;
             sign = 1;
-            hexadecimal = 0;
+            hex = 0;
             max_width = 0;
+            frac_width = 0;
             slen = (size_t) -1;
-
-            p = temp + NGX_INT64_LEN;
 
             while (*fmt >= '0' && *fmt <= '9') {
                 width = width * 10 + *fmt++ - '0';
@@ -170,16 +187,25 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
                     continue;
 
                 case 'X':
-                    hexadecimal = 2;
+                    hex = 2;
                     sign = 0;
                     fmt++;
                     continue;
 
                 case 'x':
-                    hexadecimal = 1;
+                    hex = 1;
                     sign = 0;
                     fmt++;
                     continue;
+
+                case '.':
+                    fmt++;
+
+                    while (*fmt >= '0' && *fmt <= '9') {
+                        frac_width = frac_width * 10 + *fmt++ - '0';
+                    }
+
+                    break;
 
                 case '*':
                     slen = va_arg(args, size_t);
@@ -328,6 +354,43 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
 
                 break;
 
+            case 'f':
+                f = (float) va_arg(args, double);
+
+                if (f < 0) {
+                    *buf++ = '-';
+                    f = -f;
+                }
+
+                ui64 = (int64_t) f;
+
+                buf = ngx_sprintf_num(buf, last, ui64, zero, 0, width);
+
+                if (frac_width) {
+
+                    if (buf < last) {
+                        *buf++ = '.';
+                    }
+
+                    scale = 1.0;
+
+                    for (i = 0; i < frac_width; i++) {
+                        scale *= 10.0;
+                    }
+
+                    /*
+                     * (int64_t) cast is required for msvc6:
+                     * it can not convert uint64_t to double
+                     */
+                    ui64 = (uint64_t) ((f - (int64_t) ui64) * scale);
+
+                    buf = ngx_sprintf_num(buf, last, ui64, '0', 0, frac_width);
+                }
+
+                fmt++;
+
+                continue;
+
 #if !(NGX_WIN32)
             case 'r':
                 i64 = (int64_t) va_arg(args, rlim_t);
@@ -337,7 +400,7 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
 
             case 'p':
                 ui64 = (uintptr_t) va_arg(args, void *);
-                hexadecimal = 2;
+                hex = 2;
                 sign = 0;
                 zero = '0';
                 width = NGX_PTR_SIZE * 2;
@@ -387,63 +450,7 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
                 }
             }
 
-            if (hexadecimal == 1) {
-                do {
-
-                    /* the "(uint32_t)" cast disables the BCC's warning */
-                    *--p = hex[(uint32_t) (ui64 & 0xf)];
-
-                } while (ui64 >>= 4);
-
-            } else if (hexadecimal == 2) {
-                do {
-
-                    /* the "(uint32_t)" cast disables the BCC's warning */
-                    *--p = HEX[(uint32_t) (ui64 & 0xf)];
-
-                } while (ui64 >>= 4);
-
-            } else if (ui64 <= NGX_MAX_UINT32_VALUE) {
-
-                /*
-                 * To divide 64-bit number and to find the remainder
-                 * on the x86 platform gcc and icc call the libc functions
-                 * [u]divdi3() and [u]moddi3(), they call another function
-                 * in its turn.  On FreeBSD it is the qdivrem() function,
-                 * its source code is about 170 lines of the code.
-                 * The glibc counterpart is about 150 lines of the code.
-                 *
-                 * For 32-bit numbers and some divisors gcc and icc use
-                 * the inlined multiplication and shifts.  For example,
-                 * unsigned "i32 / 10" is compiled to
-                 *
-                 *     (i32 * 0xCCCCCCCD) >> 35
-                 */
-
-                ui32 = (uint32_t) ui64;
-
-                do {
-                    *--p = (u_char) (ui32 % 10 + '0');
-                } while (ui32 /= 10);
-
-            } else {
-                do {
-                    *--p = (u_char) (ui64 % 10 + '0');
-                } while (ui64 /= 10);
-            }
-
-            len = (temp + NGX_INT64_LEN) - p;
-
-            while (len++ < width && buf < last) {
-                *buf++ = zero;
-            }
-
-            len = (temp + NGX_INT64_LEN) - p;
-            if (buf + len > last) {
-                len = last - buf;
-            }
-
-            buf = ngx_cpymem(buf, p, len);
+            buf = ngx_sprintf_num(buf, last, ui64, zero, hex, width);
 
             fmt++;
 
@@ -453,6 +460,92 @@ ngx_vsnprintf(u_char *buf, size_t max, const char *fmt, va_list args)
     }
 
     return buf;
+}
+
+
+static u_char *
+ngx_sprintf_num(u_char *buf, u_char *last, uint64_t ui64, u_char zero,
+    ngx_uint_t hexadecimal, ngx_uint_t width)
+{
+    u_char         *p, temp[NGX_INT64_LEN + 1];
+                       /*
+                        * we need temp[NGX_INT64_LEN] only,
+                        * but icc issues the warning
+                        */
+    size_t          len;
+    uint32_t        ui32;
+    static u_char   hex[] = "0123456789abcdef";
+    static u_char   HEX[] = "0123456789ABCDEF";
+
+    p = temp + NGX_INT64_LEN;
+
+    if (hexadecimal == 0) {
+
+        if (ui64 <= NGX_MAX_UINT32_VALUE) {
+
+            /*
+             * To divide 64-bit numbers and to find remainders
+             * on the x86 platform gcc and icc call the libc functions
+             * [u]divdi3() and [u]moddi3(), they call another function
+             * in its turn.  On FreeBSD it is the qdivrem() function,
+             * its source code is about 170 lines of the code.
+             * The glibc counterpart is about 150 lines of the code.
+             *
+             * For 32-bit numbers and some divisors gcc and icc use
+             * a inlined multiplication and shifts.  For example,
+             * unsigned "i32 / 10" is compiled to
+             *
+             *     (i32 * 0xCCCCCCCD) >> 35
+             */
+
+            ui32 = (uint32_t) ui64;
+
+            do {
+                *--p = (u_char) (ui32 % 10 + '0');
+            } while (ui32 /= 10);
+
+        } else {
+            do {
+                *--p = (u_char) (ui64 % 10 + '0');
+            } while (ui64 /= 10);
+        }
+
+    } else if (hexadecimal == 1) {
+
+        do {
+
+            /* the "(uint32_t)" cast disables the BCC's warning */
+            *--p = hex[(uint32_t) (ui64 & 0xf)];
+
+        } while (ui64 >>= 4);
+
+    } else { /* hexadecimal == 2 */
+
+        do {
+
+            /* the "(uint32_t)" cast disables the BCC's warning */
+            *--p = HEX[(uint32_t) (ui64 & 0xf)];
+
+        } while (ui64 >>= 4);
+    }
+
+    /* zero or space padding */
+
+    len = (temp + NGX_INT64_LEN) - p;
+
+    while (len++ < width && buf < last) {
+        *buf++ = zero;
+    }
+
+    /* number safe copy */
+
+    len = (temp + NGX_INT64_LEN) - p;
+
+    if (buf + len > last) {
+        len = last - buf;
+    }
+
+    return ngx_cpymem(buf, p, len);
 }
 
 
@@ -602,6 +695,39 @@ ngx_strcasestrn(u_char *s1, char *s2, size_t n)
         } while (c1 != c2);
 
     } while (ngx_strncasecmp(s1, (u_char *) s2, n) != 0);
+
+    return --s1;
+}
+
+
+/*
+ * ngx_strlcasestrn() is intended to search for static substring
+ * with known length in string until the argument last. The argument n
+ * must be length of the second substring - 1.
+ */
+
+u_char *
+ngx_strlcasestrn(u_char *s1, u_char *last, u_char *s2, size_t n)
+{
+    ngx_uint_t  c1, c2;
+
+    c2 = (ngx_uint_t) *s2++;
+    c2  = (c2 >= 'A' && c2 <= 'Z') ? (c2 | 0x20) : c2;
+    last -= n;
+
+    do {
+        do {
+            if (s1 >= last) {
+                return NULL;
+            }
+
+            c1 = (ngx_uint_t) *s1++;
+
+            c1  = (c1 >= 'A' && c1 <= 'Z') ? (c1 | 0x20) : c1;
+
+        } while (c1 != c2);
+
+    } while (ngx_strncasecmp(s1, s2, n) != 0);
 
     return --s1;
 }

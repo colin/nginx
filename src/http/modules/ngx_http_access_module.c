@@ -9,8 +9,6 @@
 #include <ngx_http.h>
 
 
-/* AF_INET only */
-
 typedef struct {
     in_addr_t     mask;
     in_addr_t     addr;
@@ -103,6 +101,10 @@ ngx_http_access_handler(ngx_http_request_t *r)
 
     /* AF_INET only */
 
+    if (r->connection->sockaddr->sa_family != AF_INET) {
+        return NGX_DECLINED;
+    }
+
     sin = (struct sockaddr_in *) r->connection->sockaddr;
 
     rule = alcf->rules->elts;
@@ -139,7 +141,7 @@ ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     ngx_int_t                rc;
     ngx_str_t               *value;
-    ngx_inet_cidr_t          in_cidr;
+    ngx_cidr_t               cidr;
     ngx_http_access_rule_t  *rule;
 
     if (alcf->rules == NULL) {
@@ -166,19 +168,17 @@ ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_OK;
     }
 
-    rule->addr = inet_addr((char *) value[1].data);
-
-    if (rule->addr != INADDR_NONE) {
-        rule->mask = 0xffffffff;
-
-        return NGX_CONF_OK;
-    }
-
-    rc = ngx_ptocidr(&value[1], &in_cidr);
+    rc = ngx_ptocidr(&value[1], &cidr);
 
     if (rc == NGX_ERROR) {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "invalid parameter \"%V\"",
                            &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    if (cidr.family != AF_INET) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "\"allow\" supports IPv4 only");
         return NGX_CONF_ERROR;
     }
 
@@ -187,8 +187,8 @@ ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                            "low address bits of %V are meaningless", &value[1]);
     }
 
-    rule->mask = in_cidr.mask;
-    rule->addr = in_cidr.addr;
+    rule->mask = cidr.u.in.mask;
+    rule->addr = cidr.u.in.addr;
 
     return NGX_CONF_OK;
 }

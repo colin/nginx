@@ -360,10 +360,16 @@ static ngx_int_t
 ngx_http_userid_set_uid(ngx_http_request_t *r, ngx_http_userid_ctx_t *ctx,
     ngx_http_userid_conf_t *conf)
 {
-    u_char           *cookie, *p;
-    size_t            len;
-    ngx_str_t         src, dst;
-    ngx_table_elt_t  *set_cookie, *p3p;
+    u_char               *cookie, *p;
+    size_t                len;
+    ngx_str_t             src, dst;
+    ngx_table_elt_t      *set_cookie, *p3p;
+    ngx_connection_t     *c;
+    struct sockaddr_in   *sin;
+#if (NGX_HAVE_INET6)
+    struct sockaddr_in6  *sin6;
+#endif
+
     /*
      * TODO: in the threaded mode the sequencers should be in TLS and their
      * ranges should be divided between threads
@@ -384,11 +390,33 @@ ngx_http_userid_set_uid(ngx_http_request_t *r, ngx_http_userid_ctx_t *ctx,
 
         } else {
             if (conf->service == NGX_CONF_UNSET) {
-                if (ngx_http_server_addr(r, NULL) != NGX_OK) {
+
+                c = r->connection;
+
+                if (ngx_connection_local_sockaddr(c, NULL, 0) != NGX_OK) {
                     return NGX_ERROR;
                 }
 
-                ctx->uid_set[0] = htonl(r->in_addr);
+                switch (c->local_sockaddr->sa_family) {
+
+#if (NGX_HAVE_INET6)
+                case AF_INET6:
+                    sin6 = (struct sockaddr_in6 *) c->local_sockaddr;
+
+                    p = (u_char *) &ctx->uid_set[0];
+
+                    *p++ = sin6->sin6_addr.s6_addr[12];
+                    *p++ = sin6->sin6_addr.s6_addr[13];
+                    *p++ = sin6->sin6_addr.s6_addr[14];
+                    *p = sin6->sin6_addr.s6_addr[15];
+
+                    break;
+#endif
+                default: /* AF_INET */
+                    sin = (struct sockaddr_in *) c->local_sockaddr;
+                    ctx->uid_set[0] = sin->sin_addr.s_addr;
+                    break;
+                }
 
             } else {
                 ctx->uid_set[0] = htonl(conf->service);
@@ -420,7 +448,7 @@ ngx_http_userid_set_uid(ngx_http_request_t *r, ngx_http_userid_ctx_t *ctx,
         len += conf->domain.len;
     }
 
-    cookie = ngx_palloc(r->pool, len);
+    cookie = ngx_pnalloc(r->pool, len);
     if (cookie == NULL) {
         return NGX_ERROR;
     }
@@ -496,7 +524,7 @@ ngx_http_userid_variable(ngx_http_request_t *r, ngx_http_variable_value_t *v,
     ngx_str_t *name, uint32_t *uid)
 {
     v->len = name->len + sizeof("=00001111222233334444555566667777") - 1;
-    v->data = ngx_palloc(r->pool, v->len);
+    v->data = ngx_pnalloc(r->pool, v->len);
     if (v->data == NULL) {
         return NGX_ERROR;
     }
@@ -620,7 +648,7 @@ ngx_http_userid_domain(ngx_conf_t *cf, void *post, void *data)
         return NGX_CONF_OK;
     }
 
-    new = ngx_palloc(cf->pool, sizeof("; domain=") - 1 + domain->len);
+    new = ngx_pnalloc(cf->pool, sizeof("; domain=") - 1 + domain->len);
     if (new == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -642,7 +670,7 @@ ngx_http_userid_path(ngx_conf_t *cf, void *post, void *data)
 
     u_char  *p, *new;
 
-    new = ngx_palloc(cf->pool, sizeof("; path=") - 1 + path->len);
+    new = ngx_pnalloc(cf->pool, sizeof("; path=") - 1 + path->len);
     if (new == NULL) {
         return NGX_CONF_ERROR;
     }

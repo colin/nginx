@@ -173,6 +173,7 @@ ngx_ssl_create(ngx_ssl_t *ssl, ngx_uint_t protocols, void *data)
     SSL_CTX_set_options(ssl->ctx, SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS);
 #endif
 
+    SSL_CTX_set_options(ssl->ctx, SSL_OP_SINGLE_DH_USE);
 
     if (ngx_ssl_protocols[protocols >> 1] != 0) {
         SSL_CTX_set_options(ssl->ctx, ngx_ssl_protocols[protocols >> 1]);
@@ -188,7 +189,7 @@ ngx_int_t
 ngx_ssl_certificate(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *cert,
     ngx_str_t *key)
 {
-    if (ngx_conf_full_name(cf->cycle, cert, 1) == NGX_ERROR) {
+    if (ngx_conf_full_name(cf->cycle, cert, 1) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -201,7 +202,7 @@ ngx_ssl_certificate(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *cert,
         return NGX_ERROR;
     }
 
-    if (ngx_conf_full_name(cf->cycle, key, 1) == NGX_ERROR) {
+    if (ngx_conf_full_name(cf->cycle, key, 1) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -232,7 +233,7 @@ ngx_ssl_client_certificate(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *cert,
         return NGX_OK;
     }
 
-    if (ngx_conf_full_name(cf->cycle, cert, 1) == NGX_ERROR) {
+    if (ngx_conf_full_name(cf->cycle, cert, 1) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -336,6 +337,89 @@ ngx_ssl_generate_rsa512_key(ngx_ssl_t *ssl)
 
 
 ngx_int_t
+ngx_ssl_dhparam(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *file)
+{
+    DH   *dh;
+    BIO  *bio;
+
+    /*
+     * -----BEGIN DH PARAMETERS-----
+     * MIGHAoGBALu8LcrYRnSQfEP89YDpz9vZWKP1aLQtSwju1OsPs1BMbAMCducQgAxc
+     * y7qokiYUxb7spWWl/fHSh6K8BJvmd4Bg6RqSp1fjBI9osHb302zI8pul34HcLKcl
+     * 7OZicMyaUDXYzs7vnqAnSmOrHlj6/UmI0PZdFGdX2gcd8EXP4WubAgEC
+     * -----END DH PARAMETERS-----
+     */
+
+    static unsigned char dh1024_p[] = {
+        0xBB, 0xBC, 0x2D, 0xCA, 0xD8, 0x46, 0x74, 0x90, 0x7C, 0x43, 0xFC, 0xF5,
+        0x80, 0xE9, 0xCF, 0xDB, 0xD9, 0x58, 0xA3, 0xF5, 0x68, 0xB4, 0x2D, 0x4B,
+        0x08, 0xEE, 0xD4, 0xEB, 0x0F, 0xB3, 0x50, 0x4C, 0x6C, 0x03, 0x02, 0x76,
+        0xE7, 0x10, 0x80, 0x0C, 0x5C, 0xCB, 0xBA, 0xA8, 0x92, 0x26, 0x14, 0xC5,
+        0xBE, 0xEC, 0xA5, 0x65, 0xA5, 0xFD, 0xF1, 0xD2, 0x87, 0xA2, 0xBC, 0x04,
+        0x9B, 0xE6, 0x77, 0x80, 0x60, 0xE9, 0x1A, 0x92, 0xA7, 0x57, 0xE3, 0x04,
+        0x8F, 0x68, 0xB0, 0x76, 0xF7, 0xD3, 0x6C, 0xC8, 0xF2, 0x9B, 0xA5, 0xDF,
+        0x81, 0xDC, 0x2C, 0xA7, 0x25, 0xEC, 0xE6, 0x62, 0x70, 0xCC, 0x9A, 0x50,
+        0x35, 0xD8, 0xCE, 0xCE, 0xEF, 0x9E, 0xA0, 0x27, 0x4A, 0x63, 0xAB, 0x1E,
+        0x58, 0xFA, 0xFD, 0x49, 0x88, 0xD0, 0xF6, 0x5D, 0x14, 0x67, 0x57, 0xDA,
+        0x07, 0x1D, 0xF0, 0x45, 0xCF, 0xE1, 0x6B, 0x9B
+    };
+
+    static unsigned char dh1024_g[] = { 0x02 };
+
+
+    if (file->len == 0) {
+
+        dh = DH_new();
+        if (dh == NULL) {
+            ngx_ssl_error(NGX_LOG_EMERG, ssl->log, 0, "DH_new() failed");
+            return NGX_ERROR;
+        }
+
+        dh->p = BN_bin2bn(dh1024_p, sizeof(dh1024_p), NULL);
+        dh->g = BN_bin2bn(dh1024_g, sizeof(dh1024_g), NULL);
+
+        if (dh->p == NULL || dh->g == NULL) {
+            ngx_ssl_error(NGX_LOG_EMERG, ssl->log, 0, "BN_bin2bn() failed");
+            DH_free(dh);
+            return NGX_ERROR;
+        }
+
+        SSL_CTX_set_tmp_dh(ssl->ctx, dh);
+
+        DH_free(dh);
+
+        return NGX_OK;
+    }
+
+    if (ngx_conf_full_name(cf->cycle, file, 1) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    bio = BIO_new_file((char *) file->data, "r");
+    if (bio == NULL) {
+        ngx_ssl_error(NGX_LOG_EMERG, ssl->log, 0,
+                      "BIO_new_file(\"%s\") failed", file->data);
+        return NGX_ERROR;
+    }
+
+    dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
+    if (dh == NULL) {
+        ngx_ssl_error(NGX_LOG_EMERG, ssl->log, 0,
+                      "PEM_read_bio_DHparams(\"%s\") failed", file->data);
+        BIO_free(bio);
+        return NGX_ERROR;
+    }
+
+    SSL_CTX_set_tmp_dh(ssl->ctx, dh);
+
+    DH_free(dh);
+    BIO_free(bio);
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
 ngx_ssl_create_connection(ngx_ssl_t *ssl, ngx_connection_t *c, ngx_uint_t flags)
 {
     ngx_ssl_connection_t  *sc;
@@ -405,11 +489,11 @@ ngx_ssl_handshake(ngx_connection_t *c)
 
     if (n == 1) {
 
-        if (ngx_handle_read_event(c->read, 0) == NGX_ERROR) {
+        if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
-        if (ngx_handle_write_event(c->write, 0) == NGX_ERROR) {
+        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -476,7 +560,7 @@ ngx_ssl_handshake(ngx_connection_t *c)
         c->read->handler = ngx_ssl_handshake_handler;
         c->write->handler = ngx_ssl_handshake_handler;
 
-        if (ngx_handle_read_event(c->read, 0) == NGX_ERROR) {
+        if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -488,7 +572,7 @@ ngx_ssl_handshake(ngx_connection_t *c)
         c->read->handler = ngx_ssl_handshake_handler;
         c->write->handler = ngx_ssl_handshake_handler;
 
-        if (ngx_handle_write_event(c->write, 0) == NGX_ERROR) {
+        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -674,7 +758,7 @@ ngx_ssl_handle_recv(ngx_connection_t *c, int n)
             c->ssl->saved_write_handler = NULL;
             c->write->ready = 1;
 
-            if (ngx_handle_write_event(c->write, 0) == NGX_ERROR) {
+            if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
                 return NGX_ERROR;
             }
 
@@ -702,7 +786,7 @@ ngx_ssl_handle_recv(ngx_connection_t *c, int n)
 
         c->write->ready = 0;
 
-        if (ngx_handle_write_event(c->write, 0) == NGX_ERROR) {
+        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -926,7 +1010,7 @@ ngx_ssl_write(ngx_connection_t *c, u_char *data, size_t size)
             c->ssl->saved_read_handler = NULL;
             c->read->ready = 1;
 
-            if (ngx_handle_read_event(c->read, 0) == NGX_ERROR) {
+            if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
                 return NGX_ERROR;
             }
 
@@ -954,7 +1038,7 @@ ngx_ssl_write(ngx_connection_t *c, u_char *data, size_t size)
 
         c->read->ready = 0;
 
-        if (ngx_handle_read_event(c->read, 0) == NGX_ERROR) {
+        if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -1054,11 +1138,11 @@ ngx_ssl_shutdown(ngx_connection_t *c)
         c->read->handler = ngx_ssl_shutdown_handler;
         c->write->handler = ngx_ssl_shutdown_handler;
 
-        if (ngx_handle_read_event(c->read, 0) == NGX_ERROR) {
+        if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
-        if (ngx_handle_write_event(c->write, 0) == NGX_ERROR) {
+        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
@@ -1147,23 +1231,37 @@ ngx_ssl_connection_error(ngx_connection_t *c, int sslerr, ngx_err_t err,
         n = ERR_GET_REASON(ERR_peek_error());
 
             /* handshake failures */
-        if (n == SSL_R_DIGEST_CHECK_FAILED
-            || n == SSL_R_NO_SHARED_CIPHER
-            || n == SSL_R_UNEXPECTED_MESSAGE
-            || n == SSL_R_WRONG_VERSION_NUMBER
-            || n == SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC
+        if (n == SSL_R_DIGEST_CHECK_FAILED                           /*  149 */
+            || n == SSL_R_NO_CIPHERS_PASSED                          /*  182 */
+            || n == SSL_R_NO_SHARED_CIPHER                           /*  193 */
+            || n == SSL_R_UNEXPECTED_MESSAGE                         /*  244 */
+            || n == SSL_R_UNEXPECTED_RECORD                          /*  245 */
+            || n == SSL_R_WRONG_VERSION_NUMBER                       /*  267 */
+            || n == SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC        /*  281 */
             || n == 1000 /* SSL_R_SSLV3_ALERT_CLOSE_NOTIFY */
-            || n == SSL_R_SSLV3_ALERT_UNEXPECTED_MESSAGE
-            || n == SSL_R_SSLV3_ALERT_BAD_RECORD_MAC
-            || n == SSL_R_SSLV3_ALERT_DECOMPRESSION_FAILURE
-            || n == SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE
-            || n == SSL_R_SSLV3_ALERT_BAD_CERTIFICATE
-            || n == SSL_R_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE
-            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_REVOKED
-            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_EXPIRED
-            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_UNKNOWN
-            || n == SSL_R_SSLV3_ALERT_ILLEGAL_PARAMETER
-            || n == SSL_R_TLSV1_ALERT_UNKNOWN_CA)
+            || n == SSL_R_SSLV3_ALERT_UNEXPECTED_MESSAGE             /* 1010 */
+            || n == SSL_R_SSLV3_ALERT_BAD_RECORD_MAC                 /* 1020 */
+            || n == SSL_R_TLSV1_ALERT_DECRYPTION_FAILED              /* 1021 */
+            || n == SSL_R_TLSV1_ALERT_RECORD_OVERFLOW                /* 1022 */
+            || n == SSL_R_SSLV3_ALERT_DECOMPRESSION_FAILURE          /* 1030 */
+            || n == SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE              /* 1040 */
+            || n == SSL_R_SSLV3_ALERT_NO_CERTIFICATE                 /* 1041 */
+            || n == SSL_R_SSLV3_ALERT_BAD_CERTIFICATE                /* 1042 */
+            || n == SSL_R_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE        /* 1043 */
+            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_REVOKED            /* 1044 */
+            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_EXPIRED            /* 1045 */
+            || n == SSL_R_SSLV3_ALERT_CERTIFICATE_UNKNOWN            /* 1046 */
+            || n == SSL_R_SSLV3_ALERT_ILLEGAL_PARAMETER              /* 1047 */
+            || n == SSL_R_TLSV1_ALERT_UNKNOWN_CA                     /* 1048 */
+            || n == SSL_R_TLSV1_ALERT_ACCESS_DENIED                  /* 1049 */
+            || n == SSL_R_TLSV1_ALERT_DECODE_ERROR                   /* 1050 */
+            || n == SSL_R_TLSV1_ALERT_DECRYPT_ERROR                  /* 1051 */
+            || n == SSL_R_TLSV1_ALERT_EXPORT_RESTRICTION             /* 1060 */
+            || n == SSL_R_TLSV1_ALERT_PROTOCOL_VERSION               /* 1070 */
+            || n == SSL_R_TLSV1_ALERT_INSUFFICIENT_SECURITY          /* 1071 */
+            || n == SSL_R_TLSV1_ALERT_INTERNAL_ERROR                 /* 1080 */
+            || n == SSL_R_TLSV1_ALERT_USER_CANCELLED                 /* 1090 */
+            || n == SSL_R_TLSV1_ALERT_NO_RENEGOTIATION)              /* 1100 */
         {
             switch (c->log_error) {
 
@@ -1208,7 +1306,7 @@ ngx_ssl_error(ngx_uint_t level, ngx_log_t *log, ngx_err_t err, char *fmt, ...)
     last = errstr + NGX_MAX_CONF_ERRSTR;
 
     va_start(args, fmt);
-    p = ngx_vsnprintf(errstr, sizeof(errstr) - 1, fmt, args);
+    p = ngx_vslprintf(errstr, last - 1, fmt, args);
     va_end(args);
 
     p = ngx_cpystrn(p, (u_char *) " (SSL:", last - p);
@@ -1289,7 +1387,7 @@ ngx_ssl_session_cache(ngx_ssl_t *ssl, ngx_str_t *sess_ctx,
         }
     }
 
-    SSL_CTX_set_timeout(ssl->ctx, timeout);
+    SSL_CTX_set_timeout(ssl->ctx, (long) timeout);
 
     if (shm_zone) {
         shm_zone->init = ngx_ssl_session_cache_init;
@@ -1314,10 +1412,16 @@ ngx_ssl_session_cache(ngx_ssl_t *ssl, ngx_str_t *sess_ctx,
 static ngx_int_t
 ngx_ssl_session_cache_init(ngx_shm_zone_t *shm_zone, void *data)
 {
+    size_t                    len;
     ngx_slab_pool_t          *shpool;
     ngx_ssl_session_cache_t  *cache;
 
     if (data) {
+        shm_zone->data = data;
+        return NGX_OK;
+    }
+
+    if (shm_zone->shm.exists) {
         shm_zone->data = data;
         return NGX_OK;
     }
@@ -1329,12 +1433,23 @@ ngx_ssl_session_cache_init(ngx_shm_zone_t *shm_zone, void *data)
         return NGX_ERROR;
     }
 
+    shpool->data = cache;
+    shm_zone->data = cache;
+
     ngx_rbtree_init(&cache->session_rbtree, &cache->sentinel,
                     ngx_ssl_session_rbtree_insert_value);
 
     ngx_queue_init(&cache->expire_queue);
 
-    shm_zone->data = cache;
+    len = sizeof(" in SSL session shared cache \"\"") + shm_zone->shm.name.len;
+
+    shpool->log_ctx = ngx_slab_alloc(shpool, len);
+    if (shpool->log_ctx == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_sprintf(shpool->log_ctx, " in SSL session shared cache \"%V\"%Z",
+                &shm_zone->shm.name);
 
     return NGX_OK;
 }
@@ -1777,6 +1892,100 @@ ngx_ssl_get_cipher_name(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
 
 
 ngx_int_t
+ngx_ssl_get_raw_certificate(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
+{
+    size_t   len;
+    BIO     *bio;
+    X509    *cert;
+
+    s->len = 0;
+
+    cert = SSL_get_peer_certificate(c->ssl->connection);
+    if (cert == NULL) {
+        return NGX_OK;
+    }
+
+    bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        ngx_ssl_error(NGX_LOG_ALERT, c->log, 0, "BIO_new() failed");
+        X509_free(cert);
+        return NGX_ERROR;
+    }
+
+    if (PEM_write_bio_X509(bio, cert) == 0) {
+        ngx_ssl_error(NGX_LOG_ALERT, c->log, 0, "PEM_write_bio_X509() failed");
+        goto failed;
+    }
+
+    len = BIO_pending(bio);
+    s->len = len;
+
+    s->data = ngx_pnalloc(pool, len);
+    if (s->data == NULL) {
+        goto failed;
+    }
+
+    BIO_read(bio, s->data, len);
+
+    BIO_free(bio);
+    X509_free(cert);
+
+    return NGX_OK;
+
+failed:
+
+    BIO_free(bio);
+    X509_free(cert);
+
+    return NGX_ERROR;
+}
+
+
+ngx_int_t
+ngx_ssl_get_certificate(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
+{
+    u_char      *p;
+    size_t       len;
+    ngx_uint_t   i;
+    ngx_str_t    cert;
+
+    if (ngx_ssl_get_raw_certificate(c, pool, &cert) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (cert.len == 0) {
+        s->len = 0;
+        return NGX_OK;
+    }
+
+    len = cert.len - 1;
+
+    for (i = 0; i < cert.len - 1; i++) {
+        if (cert.data[i] == LF) {
+            len++;
+        }
+    }
+
+    s->len = len;
+    s->data = ngx_pnalloc(pool, len);
+    if (s->data == NULL) {
+        return NGX_ERROR;
+    }
+
+    p = s->data;
+
+    for (i = 0; i < len; i++) {
+        *p++ = cert.data[i];
+        if (cert.data[i] == LF) {
+            *p++ = '\t';
+        }
+    }
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
 ngx_ssl_get_subject_dn(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
 {
     char       *p;
@@ -1802,7 +2011,7 @@ ngx_ssl_get_subject_dn(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
     for (len = 0; p[len]; len++) { /* void */ }
 
     s->len = len;
-    s->data = ngx_palloc(pool, len);
+    s->data = ngx_pnalloc(pool, len);
     if (s->data == NULL) {
         OPENSSL_free(p);
         X509_free(cert);
@@ -1844,7 +2053,7 @@ ngx_ssl_get_issuer_dn(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
     for (len = 0; p[len]; len++) { /* void */ }
 
     s->len = len;
-    s->data = ngx_palloc(pool, len);
+    s->data = ngx_pnalloc(pool, len);
     if (s->data == NULL) {
         OPENSSL_free(p);
         X509_free(cert);
@@ -1884,7 +2093,7 @@ ngx_ssl_get_serial_number(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
     len = BIO_pending(bio);
 
     s->len = len;
-    s->data = ngx_palloc(pool, len);
+    s->data = ngx_pnalloc(pool, len);
     if (s->data == NULL) {
         BIO_free(bio);
         X509_free(cert);

@@ -274,19 +274,24 @@ ngx_mail_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 }
 
 
-/* AF_INET only */
-
 static char *
 ngx_mail_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_mail_core_srv_conf_t  *cscf = conf;
 
+    size_t                      len, off;
+    in_port_t                   port;
     ngx_str_t                  *value;
     ngx_url_t                   u;
     ngx_uint_t                  i, m;
-    ngx_mail_listen_t          *imls;
+    struct sockaddr            *sa;
+    ngx_mail_listen_t          *ls;
     ngx_mail_module_t          *module;
+    struct sockaddr_in         *sin;
     ngx_mail_core_main_conf_t  *cmcf;
+#if (NGX_HAVE_INET6)
+    struct sockaddr_in6        *sin6;
+#endif
 
     value = cf->args->elts;
 
@@ -307,11 +312,40 @@ ngx_mail_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     cmcf = ngx_mail_conf_get_module_main_conf(cf, ngx_mail_core_module);
 
-    imls = cmcf->listen.elts;
+    ls = cmcf->listen.elts;
 
     for (i = 0; i < cmcf->listen.nelts; i++) {
 
-        if (imls[i].addr != u.addr.in_addr || imls[i].port != u.port) {
+        sa = (struct sockaddr *) ls[i].sockaddr;
+
+        if (sa->sa_family != u.family) {
+            continue;
+        }
+
+        switch (sa->sa_family) {
+
+#if (NGX_HAVE_INET6)
+        case AF_INET6:
+            off = offsetof(struct sockaddr_in6, sin6_addr);
+            len = 16;
+            sin6 = (struct sockaddr_in6 *) sa;
+            port = sin6->sin6_port;
+            break;
+#endif
+
+        default: /* AF_INET */
+            off = offsetof(struct sockaddr_in, sin_addr);
+            len = 4;
+            sin = (struct sockaddr_in *) sa;
+            port = sin->sin_port;
+            break;
+        }
+
+        if (ngx_memcmp(ls[i].sockaddr + off, u.sockaddr + off, len) != 0) {
+            continue;
+        }
+
+        if (port != u.port) {
             continue;
         }
 
@@ -320,17 +354,18 @@ ngx_mail_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-    imls = ngx_array_push(&cmcf->listen);
-    if (imls == NULL) {
+    ls = ngx_array_push(&cmcf->listen);
+    if (ls == NULL) {
         return NGX_CONF_ERROR;
     }
 
-    ngx_memzero(imls, sizeof(ngx_mail_listen_t));
+    ngx_memzero(ls, sizeof(ngx_mail_listen_t));
 
-    imls->addr = u.addr.in_addr;
-    imls->port = u.port;
-    imls->family = AF_INET;
-    imls->ctx = cf->ctx;
+    ngx_memcpy(ls->sockaddr, u.sockaddr, u.socklen);
+
+    ls->socklen = u.socklen;
+    ls->wildcard = u.wildcard;
+    ls->ctx = cf->ctx;
 
     for (m = 0; ngx_modules[m]; m++) {
         if (ngx_modules[m]->type != NGX_MAIL_MODULE) {
@@ -351,18 +386,72 @@ ngx_mail_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
     }
 
-    if (cf->args->nelts == 2) {
-        return NGX_CONF_OK;
+    for (i = 2; i < cf->args->nelts; i++) {
+
+        if (ngx_strcmp(value[i].data, "bind") == 0) {
+            ls->bind = 1;
+            continue;
+        }
+
+        if (ngx_strncmp(value[i].data, "ipv6only=o", 10) == 0) {
+#if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
+            struct sockaddr  *sa;
+            u_char            buf[NGX_SOCKADDR_STRLEN];
+
+            sa = (struct sockaddr *) ls->sockaddr;
+
+            if (sa->sa_family == AF_INET6) {
+
+                if (ngx_strcmp(&value[i].data[10], "n") == 0) {
+                    ls->ipv6only = 1;
+
+                } else if (ngx_strcmp(&value[i].data[10], "ff") == 0) {
+                    ls->ipv6only = 2;
+
+                } else {
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                       "invalid ipv6only flags \"%s\"",
+                                       &value[i].data[9]);
+                    return NGX_CONF_ERROR;
+                }
+
+                ls->bind = 1;
+
+            } else {
+                len = ngx_sock_ntop(sa, buf, NGX_SOCKADDR_STRLEN, 1);
+
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "ipv6only is not supported "
+                                   "on addr \"%*s\", ignored", len, buf);
+            }
+
+            continue;
+#else
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "bind ipv6only is not supported "
+                               "on this platform");
+            return NGX_CONF_ERROR;
+#endif
+        }
+
+        if (ngx_strcmp(value[i].data, "ssl") == 0) {
+#if (NGX_MAIL_SSL)
+            ls->ssl = 1;
+            continue;
+#else
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "the \"ssl\" parameter requires "
+                               "ngx_mail_ssl_module");
+            return NGX_CONF_ERROR;
+#endif
+        }
+
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "the invalid \"%V\" parameter", &value[i]);
+        return NGX_CONF_ERROR;
     }
 
-    if (ngx_strcmp(value[2].data, "bind") == 0) {
-        imls->bind = 1;
-        return NGX_CONF_OK;
-    }
-
-    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                       "the invalid \"%V\" parameter", &value[2]);
-    return NGX_CONF_ERROR;
+    return NGX_CONF_OK;
 }
 
 

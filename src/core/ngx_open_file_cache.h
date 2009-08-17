@@ -12,18 +12,26 @@
 #define _NGX_OPEN_FILE_CACHE_H_INCLUDED_
 
 
+#define NGX_OPEN_FILE_DIRECTIO_OFF  NGX_MAX_OFF_T_VALUE
+
+
 typedef struct {
     ngx_fd_t                 fd;
     ngx_file_uniq_t          uniq;
     time_t                   mtime;
     off_t                    size;
+    off_t                    directio;
+
     ngx_err_t                err;
+    char                    *failed;
 
     time_t                   valid;
 
     ngx_uint_t               min_uses;
 
     unsigned                 test_dir:1;
+    unsigned                 test_only:1;
+    unsigned                 log:1;
     unsigned                 errors:1;
     unsigned                 events:1;
 
@@ -31,6 +39,7 @@ typedef struct {
     unsigned                 is_file:1;
     unsigned                 is_link:1;
     unsigned                 is_exec:1;
+    unsigned                 is_directio:1;
 } ngx_open_file_info_t;
 
 
@@ -60,6 +69,7 @@ struct ngx_cached_open_file_s {
     unsigned                 is_file:1;
     unsigned                 is_link:1;
     unsigned                 is_exec:1;
+    unsigned                 is_directio:1;
 
     ngx_event_t             *event;
 };

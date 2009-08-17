@@ -71,7 +71,7 @@ NGX_USE_PCH="-fh=$NGX_OBJS/ngx_config.pch"
 
 
 # the link flags, built target is NT GUI mode application
-CORE_LINK="$CORE_LINK -l=nt_win"
+#CORE_LINK="$CORE_LINK -l=nt_win"
 
 
 # the resource file
@@ -87,3 +87,17 @@ ngx_binext=".exe"
 
 ngx_regex_dirsep='\\'
 ngx_dirsep="\\"
+
+ngx_long_start=' '
+ngx_long_end=' '
+ngx_long_regex_cont=' \&\
+	'
+ngx_long_cont=' &
+	'
+
+ngx_regex_cont=' \&\
+	'
+ngx_cont=' &
+	'
+ngx_tab=' &
+		'

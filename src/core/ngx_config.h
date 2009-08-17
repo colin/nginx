@@ -29,6 +29,10 @@
 #include <ngx_solaris_config.h>
 
 
+#elif (NGX_DARWIN)
+#include <ngx_darwin_config.h>
+
+
 #elif (NGX_WIN32)
 #include <ngx_win32_config.h>
 
@@ -106,14 +110,8 @@ typedef intptr_t        ngx_flag_t;
 #define ngx_inline      inline
 #endif
 
-#define NGX_ACCEPT_THRESHOLD   100
-
 #ifndef INADDR_NONE  /* Solaris */
 #define INADDR_NONE  ((unsigned int) -1)
-#endif
-
-#ifndef INET_ADDRSTRLEN  /* Win32 */
-#define INET_ADDRSTRLEN  16
 #endif
 
 #ifdef MAXHOSTNAMELEN

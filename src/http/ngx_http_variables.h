@@ -10,7 +10,6 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
-#include <ngx_event.h>
 #include <ngx_http.h>
 
 
@@ -62,6 +61,19 @@ ngx_int_t ngx_http_variable_unknown_header(ngx_http_variable_value_t *v,
 
 ngx_int_t ngx_http_variables_add_core_vars(ngx_conf_t *cf);
 ngx_int_t ngx_http_variables_init_vars(ngx_conf_t *cf);
+
+
+typedef struct {
+    ngx_rbtree_node_t             node;
+    size_t                        len;
+    ngx_http_variable_value_t    *value;
+} ngx_http_variable_value_node_t;
+
+
+void ngx_http_variable_value_rbtree_insert(ngx_rbtree_node_t *temp,
+    ngx_rbtree_node_t *node, ngx_rbtree_node_t *sentinel);
+ngx_http_variable_value_t *ngx_http_variable_value_lookup(ngx_rbtree_t *rbtree,
+    ngx_str_t *name, uint32_t hash);
 
 
 extern ngx_http_variable_value_t  ngx_http_variable_null_value;

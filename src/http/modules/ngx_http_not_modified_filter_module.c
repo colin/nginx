@@ -47,8 +47,8 @@ ngx_module_t  ngx_http_not_modified_filter_module = {
 static ngx_http_output_header_filter_pt  ngx_http_next_header_filter;
 
 
-static
-ngx_int_t ngx_http_not_modified_header_filter(ngx_http_request_t *r)
+static ngx_int_t
+ngx_http_not_modified_header_filter(ngx_http_request_t *r)
 {
     time_t                     ims;
     ngx_http_core_loc_conf_t  *clcf;
@@ -83,6 +83,7 @@ ngx_int_t ngx_http_not_modified_header_filter(ngx_http_request_t *r)
     }
 
     r->headers_out.status = NGX_HTTP_NOT_MODIFIED;
+    r->headers_out.status_line.len = 0;
     r->headers_out.content_type.len = 0;
     ngx_http_clear_content_length(r);
     ngx_http_clear_accept_ranges(r);
@@ -91,8 +92,8 @@ ngx_int_t ngx_http_not_modified_header_filter(ngx_http_request_t *r)
 }
 
 
-static
-ngx_int_t ngx_http_not_modified_filter_init(ngx_conf_t *cf)
+static ngx_int_t
+ngx_http_not_modified_filter_init(ngx_conf_t *cf)
 {
     ngx_http_next_header_filter = ngx_http_top_header_filter;
     ngx_http_top_header_filter = ngx_http_not_modified_header_filter;

@@ -9,10 +9,6 @@
 #include <ngx_event.h>
 
 
-/* the buffer size is enough to hold "struct sockaddr_un" */
-#define NGX_SOCKLEN  512
-
-
 static ngx_int_t ngx_enable_accept_events(ngx_cycle_t *cycle);
 static ngx_int_t ngx_disable_accept_events(ngx_cycle_t *cycle);
 static void ngx_close_accepted_connection(ngx_connection_t *c);
@@ -29,7 +25,7 @@ ngx_event_accept(ngx_event_t *ev)
     ngx_listening_t   *ls;
     ngx_connection_t  *c, *lc;
     ngx_event_conf_t  *ecf;
-    char               sa[NGX_SOCKLEN];
+    u_char             sa[NGX_SOCKADDRLEN];
 
     ecf = ngx_event_get_conf(ngx_cycle->conf_ctx, ngx_event_core_module);
 
@@ -48,7 +44,7 @@ ngx_event_accept(ngx_event_t *ev)
                    "accept on %V, ready: %d", &ls->addr_text, ev->available);
 
     do {
-        socklen = NGX_SOCKLEN;
+        socklen = NGX_SOCKADDRLEN;
 
         s = accept(lc->fd, (struct sockaddr *) sa, &socklen);
 
@@ -61,8 +57,8 @@ ngx_event_accept(ngx_event_t *ev)
                 return;
             }
 
-            ngx_log_error((err == NGX_ECONNABORTED) ? NGX_LOG_ERR:
-                                                      NGX_LOG_ALERT,
+            ngx_log_error((ngx_uint_t) ((err == NGX_ECONNABORTED) ?
+                                             NGX_LOG_ERR : NGX_LOG_ALERT),
                           ev->log, err, "accept() failed");
 
             if (err == NGX_ECONNABORTED) {
@@ -79,10 +75,10 @@ ngx_event_accept(ngx_event_t *ev)
         }
 
 #if (NGX_STAT_STUB)
-        ngx_atomic_fetch_add(ngx_stat_accepted, 1);
+        (void) ngx_atomic_fetch_add(ngx_stat_accepted, 1);
 #endif
 
-        ngx_accept_disabled = NGX_ACCEPT_THRESHOLD
+        ngx_accept_disabled = ngx_cycle->connection_n / 8
                               - ngx_cycle->free_connection_n;
 
         c = ngx_get_connection(s, ev->log);
@@ -97,7 +93,7 @@ ngx_event_accept(ngx_event_t *ev)
         }
 
 #if (NGX_STAT_STUB)
-        ngx_atomic_fetch_add(ngx_stat_active, 1);
+        (void) ngx_atomic_fetch_add(ngx_stat_active, 1);
 #endif
 
         c->pool = ngx_create_pool(ls->pool_size, ev->log);
@@ -153,8 +149,10 @@ ngx_event_accept(ngx_event_t *ev)
         c->log = log;
         c->pool->log = log;
 
-        c->listening = ls;
         c->socklen = socklen;
+        c->listening = ls;
+        c->local_sockaddr = ls->sockaddr;
+        c->local_socklen = ls->socklen;
 
         c->unexpected_eof = 1;
 
@@ -190,7 +188,7 @@ ngx_event_accept(ngx_event_t *ev)
         c->number = ngx_atomic_fetch_add(ngx_connection_counter, 1);
 
 #if (NGX_STAT_STUB)
-        ngx_atomic_fetch_add(ngx_stat_handled, 1);
+        (void) ngx_atomic_fetch_add(ngx_stat_handled, 1);
 #endif
 
 #if (NGX_THREADS)
@@ -201,15 +199,14 @@ ngx_event_accept(ngx_event_t *ev)
 #endif
 
         if (ls->addr_ntop) {
-            c->addr_text.data = ngx_palloc(c->pool, ls->addr_text_max_len);
+            c->addr_text.data = ngx_pnalloc(c->pool, ls->addr_text_max_len);
             if (c->addr_text.data == NULL) {
                 ngx_close_accepted_connection(c);
                 return;
             }
 
-            c->addr_text.len = ngx_sock_ntop(ls->family, c->sockaddr,
-                                             c->addr_text.data,
-                                             ls->addr_text_max_len);
+            c->addr_text.len = ngx_sock_ntop(c->sockaddr, c->addr_text.data,
+                                             ls->addr_text_max_len, 0);
             if (c->addr_text.len == 0) {
                 ngx_close_accepted_connection(c);
                 return;
@@ -382,7 +379,7 @@ ngx_close_accepted_connection(ngx_connection_t *c)
     }
 
 #if (NGX_STAT_STUB)
-    ngx_atomic_fetch_add(ngx_stat_active, -1);
+    (void) ngx_atomic_fetch_add(ngx_stat_active, -1);
 #endif
 }
 
