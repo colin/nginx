@@ -1,4 +1,11 @@
 --- 
+debian/upload-progress: 
+  squashed: true
+  url: git://github.com/masterzen/nginx-upload-progress-module.git
+  type: git
+  revision: d0c16a9e25ed54159291e8f617e194fe1fdd500e
+  branch: master
+  remote: braid/debian/upload-progress
 debian/passenger: 
   squashed: true
   url: git://github.com/FooBarWidget/passenger.git
