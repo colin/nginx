@@ -6,3 +6,10 @@ debian/passenger:
   revision: 423a88a1c5180f0209e91f14c05e7bde82818928
   branch: master
   remote: braid/debian/passenger
+debian/upload: 
+  squashed: true
+  url: git://github.com/vkholodkov/nginx-upload-module.git
+  type: git
+  revision: 5b5d0085f6544fdb38fba6d6bcd955ebccf90b45
+  branch: master
+  remote: braid/debian/upload
